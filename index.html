@@ -72,7 +72,7 @@ html.sky{
 }
 *{box-sizing:border-box;}
 @media(prefers-reduced-motion: reduce){ *{animation-duration:.001ms !important; animation-iteration-count:1 !important; transition-duration:.001ms !important; scroll-behavior:auto !important;} }
-html,body{margin:0;padding:0;background:var(--bg-image);background-attachment:fixed;color:var(--text);font-family:var(--body);height:100%;font-size:16.5px;-webkit-font-smoothing:antialiased;}
+html,body{margin:0;padding:0;background:var(--bg-image);background-attachment:fixed;color:var(--text);font-family:var(--body);height:100%;font-size:17.5px;-webkit-font-smoothing:antialiased;}
 body{position:relative;}
 body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.5;
   background-image:repeating-linear-gradient(180deg, rgba(255,255,255,.012) 0px, rgba(255,255,255,.012) 1px, transparent 1px, transparent 3px);}
@@ -85,7 +85,7 @@ html.sky body::before{opacity:.3; background-image:repeating-linear-gradient(180
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:8px;}
 ::-webkit-scrollbar-thumb:hover{background:var(--amber-dim);}
 a{color:var(--amber);}
-h1,h2,h3{font-family:var(--display);margin:0 0 8px;letter-spacing:.01em;}
+h1,h2,h3{font-family:var(--display);margin:0 0 8px;letter-spacing:.015em;font-weight:800;}
 h2{font-size:22px;} h3{font-size:18px;}
 :focus-visible{outline:2px solid var(--amber);outline-offset:2px;border-radius:6px;}
 button{font-family:var(--body);cursor:pointer;border:none;border-radius:13px;padding:13px 20px;font-weight:700;font-size:15.5px;transition:transform .16s var(--ease), opacity .15s, box-shadow .2s, background .2s, border-color .2s;min-height:46px;position:relative;backdrop-filter:blur(6px);}
@@ -113,6 +113,28 @@ label{font-size:12.5px;color:var(--text-dim);display:block;margin:11px 0 5px;tex
 @media (max-width:560px){.announce-banner{font-size:13px;padding:10px 14px;gap:8px;}}
 .brand{font-family:var(--display);font-weight:700;font-size:20.5px;letter-spacing:.01em;display:flex;align-items:center;gap:9px;}
 .brand .dot{width:10px;height:10px;border-radius:50%;background:var(--amber);box-shadow:0 0 10px var(--amber), 0 0 2px var(--amber);position:relative;animation:dotPulse 2.4s ease-in-out infinite;}
+.brand-lg{font-size:25px;font-weight:800;letter-spacing:.015em;}
+.brand-lg .brand-text{background:linear-gradient(135deg,var(--amber),var(--amber-2));-webkit-background-clip:text;background-clip:text;color:transparent;}
+.hamburger-btn{background:linear-gradient(135deg, color-mix(in srgb, var(--amber-dim) 30%, transparent), color-mix(in srgb, var(--surface-2) 35%, transparent));border:1.5px solid var(--border);border-radius:12px;width:46px;height:46px;min-height:46px;min-width:46px;display:flex;align-items:center;justify-content:center;padding:0;flex-shrink:0;}
+.hamburger-btn span{display:block;width:19px;height:2.4px;background:var(--text);border-radius:2px;position:relative;}
+.hamburger-btn span::before,.hamburger-btn span::after{content:'';position:absolute;left:0;width:19px;height:2.4px;background:var(--text);border-radius:2px;}
+.hamburger-btn span::before{top:-6px;}
+.hamburger-btn span::after{top:6px;}
+.drawer-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(2px);z-index:200;opacity:0;pointer-events:none;transition:opacity .22s var(--ease);}
+.drawer-overlay.open{opacity:1;pointer-events:auto;}
+.drawer{position:fixed;top:0;left:0;bottom:0;width:min(330px,86vw);background:var(--surface);border-right:1.5px solid var(--border);z-index:201;transform:translateX(-105%);transition:transform .26s var(--ease);display:flex;flex-direction:column;overflow-y:auto;box-shadow:20px 0 60px rgba(0,0,0,.4);}
+.drawer.open{transform:translateX(0);}
+.drawer-profile{padding:30px 20px 22px;text-align:center;background:linear-gradient(180deg, color-mix(in srgb, var(--amber) 14%, transparent), transparent);border-bottom:1.5px solid var(--border);}
+.drawer-profile img,.drawer-profile .avatar-fallback{width:96px;height:96px;border-radius:50%;object-fit:cover;border:3px solid var(--amber);box-shadow:0 0 0 5px var(--amber-dim), 0 8px 24px rgba(0,0,0,.35);margin:0 auto 14px;display:flex;align-items:center;justify-content:center;font-family:var(--display);font-weight:800;font-size:36px;color:var(--amber);background:var(--amber-dim);}
+.drawer-profile .dp-name{font-family:var(--display);font-weight:800;font-size:22px;margin-bottom:4px;}
+.drawer-profile .dp-meta{color:var(--text-dim);font-size:13.5px;line-height:1.55;}
+.drawer-profile .dp-edit{margin-top:14px;padding:9px 16px;font-size:12.5px;}
+.drawer-nav{padding:14px 10px;display:flex;flex-direction:column;gap:3px;flex:1;}
+.drawer-nav-item{padding:14px 16px;border-radius:12px;font-weight:700;font-size:15px;color:var(--text-dim);cursor:pointer;transition:background .15s,color .15s;}
+.drawer-nav-item:active{transform:scale(.98);}
+.drawer-nav-item.on{background:var(--amber-dim);color:var(--amber-2);}
+.drawer-footer{padding:14px;border-top:1.5px solid var(--border);display:flex;gap:8px;align-items:center;}
+.drawer-footer button.ghost{flex:1;padding:11px 14px;font-size:13px;}
 @keyframes dotPulse{0%,100%{box-shadow:0 0 8px var(--amber), 0 0 2px var(--amber);}50%{box-shadow:0 0 16px var(--amber), 0 0 4px var(--amber);}}
 .container{max-width:960px;margin:0 auto;padding:24px 18px 90px;width:100%;flex:1;}
 @keyframes riseIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
@@ -1082,24 +1104,27 @@ function render(){
 }
 
 function topbar(title, right=''){
-  const isLight = document.documentElement.classList.contains('light');
-  const p = S.profile;
-  const streak = p && p.role!=='admin' ? currentStreak() : 0;
-  const who = (p && p.role!=='admin' && p.name) ? `<div class="row" style="gap:11px;align-items:center;margin-right:6px;">
-    ${p.avatar_url ? `<img src="${p.avatar_url}" alt="" style="width:46px;height:46px;border-radius:50%;object-fit:cover;border:2px solid var(--amber);">`
-                    : `<div style="width:46px;height:46px;border-radius:50%;background:var(--amber-dim);color:var(--amber);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:19px;font-family:var(--display);border:2px solid var(--amber);">${escapeHtml(p.name[0]||'?').toUpperCase()}</div>`}
-    <div style="line-height:1.3;">
-      <div style="font-weight:700;font-size:17px;">${escapeHtml(p.name)}</div>
-      ${p.batch?`<div class="muted" style="font-size:13px;">Batch ${escapeHtml(p.batch)}</div>`:''}
-    </div>
-    ${streak>1 ? `<span class="streakbadge">🔥 ${streak}d</span>` : ''}
-    <button class="ghost" id="editProfileBtn" title="Edit profile" style="padding:8px 12px;font-size:13px;">✏️ Edit Profile</button>
-  </div>` : '';
-  return `<div class="topbar"><div class="brand"><span class="dot"></span>${title}</div><div class="row">${who}${right}${themeSwatchesHtml()}<button class="ghost" id="signoutBtn" style="padding:8px 12px;font-size:13px;">Sign out</button></div></div>`;
+  return `<div class="topbar"><button class="hamburger-btn" id="hamburgerBtn" aria-label="Menu"><span></span></button><div class="brand brand-lg"><span class="dot"></span><span class="brand-text">${title}</span></div><div class="row">${right}</div></div>`;
 }
+// Builds the slide-out nav drawer markup. profileHtml is only non-empty on
+// the user side (big avatar/name/batch card at the top); navItemsHtml is
+// the list of .drawer-nav-item rows (same tabs that used to sit in a
+// horizontal bar). Appended once per render, alongside the topbar.
+function drawerFrame(navItemsHtml, profileHtml=''){
+  return `<div class="drawer-overlay" id="drawerOverlay"></div>
+  <div class="drawer" id="navDrawer">
+    ${profileHtml}
+    <div class="drawer-nav">${navItemsHtml}</div>
+    <div class="drawer-footer">${themeSwatchesHtml()}<button class="ghost" id="drawerSignoutBtn">Sign out</button></div>
+  </div>`;
+}
+function openDrawer(){ const ov=document.getElementById('drawerOverlay'), dr=document.getElementById('navDrawer'); if(ov) ov.classList.add('open'); if(dr) dr.classList.add('open'); }
+function closeDrawer(){ const ov=document.getElementById('drawerOverlay'), dr=document.getElementById('navDrawer'); if(ov) ov.classList.remove('open'); if(dr) dr.classList.remove('open'); }
 function bindTopbar(){
-  const b=document.getElementById('signoutBtn'); if(b) b.onclick=signOut;
-  const eb=document.getElementById('editProfileBtn'); if(eb) eb.onclick=openEditProfileModal;
+  const hb=document.getElementById('hamburgerBtn'); if(hb) hb.onclick=openDrawer;
+  const ov=document.getElementById('drawerOverlay'); if(ov) ov.onclick=closeDrawer;
+  const so=document.getElementById('drawerSignoutBtn'); if(so) so.onclick=signOut;
+  const eb=document.getElementById('editProfileBtn'); if(eb) eb.onclick=()=>{ closeDrawer(); openEditProfileModal(); };
   wireThemeSwatches();
 }
 async function signOut(){ if(expiryWatcherHandle){ clearInterval(expiryWatcherHandle); expiryWatcherHandle=null; } await sb.auth.signOut(); S.profile=null; S.deviceBlocked=false; render(); }
@@ -1194,6 +1219,15 @@ async function uploadToCloudflare(file){
   }catch(e){
     return { error: { message: e.message || 'Network error uploading to Cloudflare' } };
   }
+}
+// Explanations (the bulkiest field — often 65%+ of a question's total text)
+// go to Cloudflare too, as a plain .txt file, so almost nothing but a
+// short URL touches the database. Empty/blank explanations are skipped —
+// no point uploading a 0-byte file.
+async function uploadExplanationToCloudflare(text){
+  if(!text || !text.trim()) return { url: null };
+  const file = new File([text], 'explanation.txt', { type: 'text/plain' });
+  return uploadToCloudflare(file);
 }
 
 // ================= EDIT PROFILE (user side) =================
@@ -1402,6 +1436,27 @@ async function renderUser(){
   S.utab = S.utab || 'qbanks';
   const adminBackBtn = S.profile?.role==='admin' ? `<button class="primary" id="backToAdminBtn" style="padding:8px 12px;font-size:12px;">← Back to Admin</button>` : '';
   app.innerHTML = topbar('QBank Console', adminBackBtn) + `<div id="announceBannerHost">${announcementBannerHtml()}</div>`;
+  const streak = currentStreak();
+  const pp = S.profile;
+  const drawerProfileHtml = `<div class="drawer-profile">
+    ${pp.avatar_url ? `<img src="${pp.avatar_url}" alt="">` : `<div class="avatar-fallback">${escapeHtml((pp.name||pp.email||'?')[0]||'?').toUpperCase()}</div>`}
+    <div class="dp-name">${escapeHtml(pp.name||'—')}</div>
+    <div class="dp-meta">
+      ${pp.batch?`Batch ${escapeHtml(pp.batch)}`:''}${pp.batch&&pp.college?' · ':''}${pp.college?escapeHtml(pp.college):''}
+      <br>${escapeHtml(pp.email||'')}
+      ${streak>1 ? `<br><span class="streakbadge" style="margin-top:6px;display:inline-block;">🔥 ${streak}d streak</span>` : ''}
+    </div>
+    <button class="ghost dp-edit" id="editProfileBtn">✏️ Edit Profile</button>
+  </div>`;
+  const drawerNavHtml = `
+    <div class="drawer-nav-item ${S.utab==='qbanks'?'on':''}" data-t="qbanks">QBanks</div>
+    <div class="drawer-nav-item ${S.utab==='stats'?'on':''}" data-t="stats">Today's stats</div>
+    <div class="drawer-nav-item ${S.utab==='decks'?'on':''}" data-t="decks">Category decks</div>
+    <div class="drawer-nav-item ${S.utab==='custom'?'on':''}" data-t="custom">Custom test</div>
+    <div class="drawer-nav-item ${S.utab==='results'?'on':''}" data-t="results">My Results</div>
+    <div class="drawer-nav-item ${S.utab==='sub'?'on':''}" data-t="sub">Subscription</div>
+    <div class="drawer-nav-item ${S.utab==='feedback'?'on':''}" data-t="feedback">💬 Feedback</div>`;
+  app.innerHTML += drawerFrame(drawerNavHtml, drawerProfileHtml);
   bindTopbar();
   bindAnnouncementBanner();
   if(document.getElementById('backToAdminBtn')) document.getElementById('backToAdminBtn').onclick = ()=>{ goTo({view:'admin', atab:'upload'}); };
@@ -1410,16 +1465,8 @@ async function renderUser(){
 
   const isActive = (S.profile.status==='active' || S.profile.status==='verified') && (!S.profile.subscription_expiry || new Date(S.profile.subscription_expiry) > new Date());
 
-  wrap.innerHTML += `<div class="tabs">
-    <div class="tab ${S.utab==='qbanks'?'on':''}" data-t="qbanks">QBanks</div>
-    <div class="tab ${S.utab==='stats'?'on':''}" data-t="stats">Today's stats</div>
-    <div class="tab ${S.utab==='decks'?'on':''}" data-t="decks">Category decks</div>
-    <div class="tab ${S.utab==='custom'?'on':''}" data-t="custom">Custom test</div>
-    <div class="tab ${S.utab==='results'?'on':''}" data-t="results">My Results</div>
-    <div class="tab ${S.utab==='sub'?'on':''}" data-t="sub">Subscription</div>
-    <div class="tab ${S.utab==='feedback'?'on':''}" data-t="feedback">💬 Feedback</div>
-  </div><div id="utabBody"><div class="muted" style="padding:20px 0;">Loading…</div></div>`;
-  wrap.querySelectorAll('.tab[data-t]').forEach(t=>t.onclick=()=>{ if(t.dataset.t===S.utab) return; goTo({utab:t.dataset.t, nav:{}}); });
+  wrap.innerHTML += `<div id="utabBody"><div class="muted" style="padding:20px 0;">Loading…</div></div>`;
+  document.querySelectorAll('.drawer-nav-item[data-t]').forEach(t=>t.onclick=()=>{ closeDrawer(); if(t.dataset.t===S.utab) return; goTo({utab:t.dataset.t, nav:{}}); });
 
   if(!isActive){
     document.getElementById('utabBody').innerHTML = `<div class="locked-banner"><h3>🔒 Subscription ${S.profile.status==='pending'?'pending activation':'inactive'}</h3>
@@ -2650,7 +2697,7 @@ async function startAttempt(setId, presetSet){
   // long to open. Text loads instantly; each question's image is fetched
   // lazily (see ensureQuestionImage) only once you're actually viewing it.
   const { data: questions } = await sb.from('questions')
-    .select('id, q_text, options, correct_index, explanation, subject, is_controversial')
+    .select('id, q_text, options, correct_index, explanation_url, subject, is_controversial')
     .in('id', set.question_ids);
   const ordered = set.question_ids.map(id=>questions.find(q=>q.id===id)).filter(Boolean);
   if(!att){
@@ -2676,6 +2723,27 @@ function ensureQuestionImage(q, onLoaded){
     q._imgFetching = false;
     if(onLoaded) onLoaded();
   });
+}
+// Same lazy-load idea, for explanations. New rows carry `explanation_url`
+// (a .txt file on Cloudflare) — fetched directly, no database round trip
+// needed at all. Older rows from before this change may still have the
+// full text sitting in the `explanation` column instead; those are
+// supported too (falls back to a normal Supabase select).
+function ensureQuestionExplanation(q, onLoaded){
+  if(q.explanation !== undefined || q._explFetching) return;
+  q._explFetching = true;
+  (async ()=>{
+    let text = null;
+    if(q.explanation_url){
+      try{ const res = await fetch(q.explanation_url); text = res.ok ? await res.text() : null; }catch(e){ text = null; }
+    } else {
+      const { data } = await sb.from('questions').select('explanation').eq('id', q.id).maybeSingle();
+      text = data ? data.explanation : null;
+    }
+    q.explanation = text;
+    q._explFetching = false;
+    if(onLoaded) onLoaded();
+  })();
 }
 let timerHandle=null;
 function startTimer(){
@@ -2854,6 +2922,7 @@ async function renderReview(withExpl, i=0, wrongOnly=false){
   i = Math.max(0, Math.min(i, questions.length-1));
   const q = questions[i]; const a = att.answers[q.id];
   ensureQuestionImage(q, ()=>{ if(S.review && S.review.questions[S.review.questions.indexOf(q)]===q) renderReview(withExpl, i, wrongOnly); });
+  if(withExpl) ensureQuestionExplanation(q, ()=>{ if(S.review && S.review.questions[S.review.questions.indexOf(q)]===q) renderReview(withExpl, i, wrongOnly); });
   const { data: existingCat } = await sb.from('categorizations').select('category').eq('user_id', S.profile.id).eq('question_id', q.id).maybeSingle();
   const acc = q._acc;
   const accPct = acc && acc.total_attempts ? Math.round((acc.correct_attempts/acc.total_attempts)*1000)/10 : null;
@@ -2872,7 +2941,7 @@ async function renderReview(withExpl, i=0, wrongOnly=false){
       ${q.is_controversial ? `<div class="controversial-banner">⚠️ <b>Marked controversial by admin</b> — the correct answer for this question is under review.</div>` : ''}
       <div style="font-weight:600;font-size:18.5px;line-height:1.55;">${q.image_url===undefined && q._imgFetching ? '<div class="muted" style="font-size:12px;margin-bottom:8px;">Loading image…</div>' : ''}${richBlock(q.q_text, q.image_url)}</div>
       <div id="revOpts"></div>
-      ${withExpl?`<div class="divider"></div><div><b>Explanation</b>${renderRichText(q.explanation||'No explanation provided.')}</div>`:''}
+      ${withExpl?`<div class="divider"></div><div><b>Explanation</b>${q.explanation===undefined?'<div class="muted" style="font-size:12px;margin:6px 0;">Loading explanation…</div>':renderRichText(q.explanation||'No explanation provided.')}</div>`:''}
     </div>
     ${withExpl?`<div class="row"><button class="subtle" id="ssWith">📸 Save screenshot (with explanation)</button><button class="subtle" id="ssWithout">📸 Save screenshot (without explanation)</button></div>`
       :`<div class="card"><div class="muted" style="margin-bottom:6px;">Why did this go wrong?</div><div class="catbtns" id="catbtns"></div></div>`}
@@ -3030,23 +3099,24 @@ async function renderAdmin(){
   S.atab = S.atab || 'upload';
   if(S.atab==='coupons') S.atab = 'users'; // old standalone Coupons tab was removed — coupon management now lives inside each user's profile
   app.innerHTML = topbar('QBank Console · Admin') + `<div id="announceBannerHost">${announcementBannerHtml()}</div>`;
+  const drawerNavHtml = `
+    <div class="drawer-nav-item ${S.atab==='upload'?'on':''}" data-t="upload">Upload</div>
+    <div class="drawer-nav-item ${S.atab==='announce'?'on':''}" data-t="announce">📢 Announce</div>
+    <div class="drawer-nav-item ${S.atab==='folders'?'on':''}" data-t="folders">Sections</div>
+    <div class="drawer-nav-item ${S.atab==='manage'?'on':''}" data-t="manage">Manage</div>
+    <div class="drawer-nav-item ${S.atab==='users'?'on':''}" data-t="users">Users</div>
+    <div class="drawer-nav-item ${S.atab==='plans'?'on':''}" data-t="plans">Plans</div>
+    <div class="drawer-nav-item ${S.atab==='feedback'?'on':''}" data-t="feedback">💬 Feedback</div>
+    <div class="drawer-nav-item ${S.atab==='rankings'?'on':''}" data-t="rankings">Rankings</div>
+    <div class="drawer-nav-item ${S.atab==='queries'?'on':''}" data-t="queries">❓ Queries</div>
+    <div class="drawer-nav-item ${S.atab==='cleanup'?'on':''}" data-t="cleanup">🧹 Cleanup</div>
+    <div class="drawer-nav-item ${S.atab==='attempt'?'on':''}" data-t="attempt">Practice (user view)</div>`;
+  app.innerHTML += drawerFrame(drawerNavHtml);
   bindTopbar();
   bindAnnouncementBanner();
   const wrap=document.createElement('div'); wrap.className='container'; app.appendChild(wrap);
-  wrap.innerHTML = `<div class="tabs">
-    <div class="tab ${S.atab==='upload'?'on':''}" data-t="upload">Upload</div>
-    <div class="tab ${S.atab==='announce'?'on':''}" data-t="announce">📢 Announce</div>
-    <div class="tab ${S.atab==='folders'?'on':''}" data-t="folders">Sections</div>
-    <div class="tab ${S.atab==='manage'?'on':''}" data-t="manage">Manage</div>
-    <div class="tab ${S.atab==='users'?'on':''}" data-t="users">Users</div>
-    <div class="tab ${S.atab==='plans'?'on':''}" data-t="plans">Plans</div>
-    <div class="tab ${S.atab==='feedback'?'on':''}" data-t="feedback">💬 Feedback</div>
-    <div class="tab ${S.atab==='rankings'?'on':''}" data-t="rankings">Rankings</div>
-    <div class="tab ${S.atab==='queries'?'on':''}" data-t="queries">❓ Queries</div>
-    <div class="tab ${S.atab==='cleanup'?'on':''}" data-t="cleanup">🧹 Cleanup</div>
-    <div class="tab ${S.atab==='attempt'?'on':''}" data-t="attempt">Practice (user view)</div>
-  </div><div id="atabBody"></div>`;
-  wrap.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{ if(t.dataset.t===S.atab) return; goTo({atab:t.dataset.t}); });
+  wrap.innerHTML = `<div id="atabBody"></div>`;
+  document.querySelectorAll('.drawer-nav-item[data-t]').forEach(t=>t.onclick=()=>{ closeDrawer(); if(t.dataset.t===S.atab) return; goTo({atab:t.dataset.t}); });
   if(S.atab==='upload') return adminUpload();
   if(S.atab==='announce') return adminAnnounce();
   if(S.atab==='folders') return adminFolders();
@@ -3375,7 +3445,8 @@ async function adminUpload(){
             const r = rowsToProcess[i];
             const q_text = await resolveInlineImagesAsync(r.question||r.q_text||r.q||'', imageMap);
             const options = await Promise.all((r.options||r.opts||[]).map(o=>resolveInlineImagesAsync(o, imageMap)));
-            const explanation = await resolveInlineImagesAsync(r.explanation||r.expl||'', imageMap);
+            const explanationText = await resolveInlineImagesAsync(r.explanation||r.expl||'', imageMap);
+            const explUp = await uploadExplanationToCloudflare(explanationText);
             const image_url = await resolveImageFieldAsync(r.image_url||r.image||null, imageMap);
             if(!q_text || !options?.length) continue;
             payload.push({
@@ -3383,7 +3454,7 @@ async function adminUpload(){
               folder_id: folder.id,
               q_text, options,
               correct_index: typeof r.answer==='number'?r.answer: typeof r.correct_index==='number'?r.correct_index: letterToIndex(r.answer||r.correct),
-              explanation,
+              explanation_url: explUp.url || null,
               image_url,
               subject: r.subject || detection.subject || g.folderName,
               order_index: baseIndex + i,
@@ -3760,9 +3831,10 @@ async function adminCleanup(){
   body.innerHTML = `<div class="card muted">Checking…</div>`;
 
   const cutoff = new Date(Date.now() - 30*24*60*60*1000).toISOString();
-  const [{ count: abandonedCount }, { count: base64Count }] = await Promise.all([
+  const [{ count: abandonedCount }, { count: base64Count }, { count: explCount }] = await Promise.all([
     sb.from('attempts').select('id', {count:'exact', head:true}).eq('status','in_progress').lt('started_at', cutoff),
     sb.from('questions').select('id', {count:'exact', head:true}).like('image_url', 'data:%'),
+    sb.from('questions').select('id', {count:'exact', head:true}).not('explanation','is',null).is('explanation_url', null),
   ]);
 
   body.innerHTML = `
@@ -3779,6 +3851,13 @@ async function adminCleanup(){
     <p><b>${base64Count||0}</b> question(s) with an embedded image found.</p>
     <button class="primary" id="cleanBase64" ${!base64Count?'disabled':''}>Migrate to Cloudflare</button>
     <div id="cleanBase64Status" class="muted" style="margin-top:8px; white-space:pre-line;"></div>
+  </div>
+  <div class="card">
+    <h3>Explanations stored in the database</h3>
+    <p class="muted">Explanation text is usually the single biggest field per question (often 500+ characters each). This moves it to a small file on Cloudflare and clears it from the database row, keeping only a short link — the explanation still shows up exactly the same in the app.</p>
+    <p><b>${explCount||0}</b> question(s) with explanation text still in the database.</p>
+    <button class="primary" id="cleanExpl" ${!explCount?'disabled':''}>Migrate to Cloudflare</button>
+    <div id="cleanExplStatus" class="muted" style="margin-top:8px; white-space:pre-line;"></div>
   </div>`;
 
   const abBtn = document.getElementById('cleanAbandoned');
@@ -3804,6 +3883,24 @@ async function adminCleanup(){
       const migrated = await migrateBase64Image(row.image_url);
       if(migrated){
         const { error } = await sb.from('questions').update({image_url: migrated}).eq('id', row.id);
+        if(error) failed++; else done++;
+      } else failed++;
+    }
+    st.textContent = `Done — ${done} migrated${failed?`, ${failed} failed (left as-is, safe to try again later)`:''}.`;
+  };
+
+  const exBtn = document.getElementById('cleanExpl');
+  if(exBtn) exBtn.onclick = async ()=>{
+    if(!confirm(`Migrate ${explCount} explanation(s) to Cloudflare? This can take a while for large numbers — keep this tab open until it finishes.`)) return;
+    exBtn.disabled = true;
+    const st = document.getElementById('cleanExplStatus');
+    const { data: rows } = await sb.from('questions').select('id, explanation').not('explanation','is',null).is('explanation_url', null).limit(2000);
+    let done=0, failed=0;
+    for(const row of rows||[]){
+      st.textContent = `Migrating… ${done+failed}/${rows.length}`;
+      const up = await uploadExplanationToCloudflare(row.explanation);
+      if(up.url){
+        const { error } = await sb.from('questions').update({explanation_url: up.url, explanation: null}).eq('id', row.id);
         if(error) failed++; else done++;
       } else failed++;
     }
