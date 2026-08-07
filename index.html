@@ -498,13 +498,24 @@ function naturalCompare(a, b){
   }
   return 0;
 }
+// Folders (or subject-groups within one) at or under this size become a
+// single set holding every question — matches how platforms export their
+// own pre-made tests (e.g. a 400-question Grand Test) so it isn't sliced
+// up. Anything bigger (e.g. a 1,995-question "ENT" subject dump — clearly
+// not meant for one sitting) falls back to fixed-size chunks instead.
+const ONE_SET_MAX_QUESTIONS = 400;
 const EXAM_CONFIG = {
-  subjectwise:  {label:'Subject-wise', perSet:50, minutesPerFull:45, sequential:false},
-  inicet:       {label:'INICET pattern',        perSet:50, minutesPerFull:45, sequential:true},
+  subjectwise:  {label:'Subject-wise (one set up to 400q, else 50 q/set)', perSet:50, minutesPerFull:45, sequential:false, singleSetPreferred:true},
+  inicet:       {label:'INICET pattern (one set up to 400q, else 50 q/set)', perSet:50, minutesPerFull:45, sequential:true, singleSetPreferred:true},
   neetpg:       {label:'NEET PG pattern',       perSet:40, minutesPerFull:42, sequential:true},
   updated_neetpg:{label:'Updated NEET PG pattern', perSet:36, minutesPerFull:42, sequential:true},
-  auto_subsection:{label:'Auto (non-subject file) — 50 q / 45 min subsections', perSet:50, minutesPerFull:45, sequential:true},
+  auto_subsection:{label:'Auto — one set up to 400q, else 50 q/set', perSet:50, minutesPerFull:45, sequential:true, singleSetPreferred:true},
 };
+// Decides the actual chunk size for one folder/subject-group: null means
+// "one set, don't split" (chunkToSets scales its duration to 0.9 min/q).
+function effectivePerSet(count, cfg){
+  return (cfg.singleSetPreferred && count <= ONE_SET_MAX_QUESTIONS) ? null : cfg.perSet;
+}
 
 // The 19 NEET PG subjects, each with common short/long-form aliases used by
 // providers like BTR/Prepladder. A file/folder name is matched against these
@@ -1202,6 +1213,24 @@ async function uploadToCloudinary(file, folder){
 const CF_WORKER_URL = 'https://qbank-content.qbank-vansh.workers.dev';
 const CF_UPLOAD_SECRET = 'Gsbekwndbeisnbsbdbduejekwmenrhdi'; // same string you put in the Worker's UPLOAD_SECRET variable
 
+// Runs fn(item, index) over `items` with at most `limit` running at once,
+// instead of either all-at-once (can overwhelm the network) or one-at-a-
+// time (painfully slow for tens of thousands of items — this is what was
+// making a 100k-question upload take 30+ minutes). Results come back in
+// the same order as `items`.
+async function mapWithConcurrency(items, limit, fn){
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker(){
+    while(next < items.length){
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({length: Math.min(limit, items.length)}, worker));
+  return results;
+}
+
 async function uploadToCloudflare(file){
   try{
     const res = await fetch(CF_WORKER_URL, {
@@ -1221,14 +1250,10 @@ async function uploadToCloudflare(file){
   }
 }
 // Explanations (the bulkiest field — often 65%+ of a question's total text)
-// go to Cloudflare too, as a plain .txt file, so almost nothing but a
-// short URL touches the database. Empty/blank explanations are skipped —
-// no point uploading a 0-byte file.
-async function uploadExplanationToCloudflare(text){
-  if(!text || !text.trim()) return { url: null };
-  const file = new File([text], 'explanation.txt', { type: 'text/plain' });
-  return uploadToCloudflare(file);
-}
+// go to Cloudflare too — batched in groups of ~50 questions per file (see
+// the upload pipeline) rather than one file per question, since a lone
+// network request per question doesn't scale to six-figure question
+// counts.
 
 // ================= EDIT PROFILE (user side) =================
 // Uploads the replacement avatar/college-ID straight to Cloudinary (no
@@ -2697,7 +2722,7 @@ async function startAttempt(setId, presetSet){
   // long to open. Text loads instantly; each question's image is fetched
   // lazily (see ensureQuestionImage) only once you're actually viewing it.
   const { data: questions } = await sb.from('questions')
-    .select('id, q_text, options, correct_index, explanation_url, subject, is_controversial')
+    .select('id, q_text, options, correct_index, explanation_url, order_index, subject, is_controversial')
     .in('id', set.question_ids);
   const ordered = set.question_ids.map(id=>questions.find(q=>q.id===id)).filter(Boolean);
   if(!att){
@@ -2730,13 +2755,29 @@ function ensureQuestionImage(q, onLoaded){
 // needed at all. Older rows from before this change may still have the
 // full text sitting in the `explanation` column instead; those are
 // supported too (falls back to a normal Supabase select).
+// Batch explanation files are shared by up to 50 questions — cache each
+// one by URL so reviewing a whole set only fetches its batch file once,
+// not once per question.
+const _explBatchCache = new Map();
+function fetchExplanationBatch(url){
+  if(!_explBatchCache.has(url)){
+    _explBatchCache.set(url, fetch(url).then(res=> res.ok ? res.json() : {}).catch(()=>({})));
+  }
+  return _explBatchCache.get(url);
+}
 function ensureQuestionExplanation(q, onLoaded){
   if(q.explanation !== undefined || q._explFetching) return;
   q._explFetching = true;
   (async ()=>{
     let text = null;
     if(q.explanation_url){
-      try{ const res = await fetch(q.explanation_url); text = res.ok ? await res.text() : null; }catch(e){ text = null; }
+      try{
+        const batch = await fetchExplanationBatch(q.explanation_url);
+        // order_index: how new (set-wise-batched) uploads key each entry.
+        // id: how the Cleanup tool's one-off migration of old rows keys
+        // entries when it processes existing questions individually.
+        text = (batch[q.order_index] ?? batch[q.id]) ?? null;
+      }catch(e){ text = null; }
     } else {
       const { data } = await sb.from('questions').select('explanation').eq('id', q.id).maybeSingle();
       text = data ? data.explanation : null;
@@ -3493,26 +3534,64 @@ async function readUploadFileAsText(file){
           const { count } = await sb.from('questions').select('id', {count:'exact', head:true}).eq('folder_id', folder.id);
           const baseIndex = count||0;
           const rowsToProcess = g.rows.slice(insertedCount);
-          const payload = [];
-          for(let i=0; i<rowsToProcess.length; i++){
-            const r = rowsToProcess[i];
+          let prepDone = 0;
+          // Step 1: resolve every row's text fields in parallel. No network
+          // calls here except the rare embedded-base64-image case — the
+          // heavy explanation upload is deliberately NOT done per-row (see
+          // step 2 below).
+          const resolved = await mapWithConcurrency(rowsToProcess, 30, async (r, i)=>{
             const q_text = await resolveInlineImagesAsync(r.question||r.q_text||r.q||'', imageMap);
             const options = await Promise.all((r.options||r.opts||[]).map(o=>resolveInlineImagesAsync(o, imageMap)));
             const explanationText = await resolveInlineImagesAsync(r.explanation||r.expl||'', imageMap);
-            const explUp = await uploadExplanationToCloudflare(explanationText);
             const image_url = await resolveImageFieldAsync(r.image_url||r.image||null, imageMap);
-            if(!q_text || !options?.length) continue;
-            payload.push({
+            prepDone++;
+            if(prepDone % 100 === 0 || prepDone===rowsToProcess.length){
+              st.textContent = `Preparing questions… ${prepDone}/${rowsToProcess.length}`;
+            }
+            return { r, i, q_text, options, explanationText, image_url };
+          });
+          // Step 2: batch explanations in groups of 50 (matching the default
+          // set size) — one Cloudflare upload per batch of questions instead
+          // of one per question. This is what actually cuts the number of
+          // network requests down (e.g. 113,888 questions -> ~2,300 batch
+          // files), since each request has real network latency that adds
+          // up fast at six-figure question counts. Keyed by order_index, so
+          // the review screen can pull just its own question's text back
+          // out of the shared batch file (see ensureQuestionExplanation).
+          const EXPL_BATCH_SIZE = 50;
+          const batches = [];
+          for(let b=0; b<resolved.length; b+=EXPL_BATCH_SIZE) batches.push(resolved.slice(b, b+EXPL_BATCH_SIZE));
+          let batchDone = 0;
+          await mapWithConcurrency(batches, 15, async (batch)=>{
+            const obj = {};
+            let any = false;
+            batch.forEach(item=>{
+              if(item.explanationText && item.explanationText.trim()){ obj[baseIndex+item.i] = item.explanationText; any = true; }
+            });
+            let url = null;
+            if(any){
+              const up = await uploadToCloudflare(new File([JSON.stringify(obj)], 'explanations.json', {type:'application/json'}));
+              url = up.error ? null : up.url;
+            }
+            batch.forEach(item=>{ item.explUrl = url; });
+            batchDone++;
+            if(batches.length>1) st.textContent = `Uploading explanations… batch ${batchDone}/${batches.length}`;
+          });
+          const built = resolved.map(item=>{
+            if(!item.q_text || !item.options?.length) return null;
+            const r = item.r;
+            return {
               qbank_id: g.qbankId,
               folder_id: folder.id,
-              q_text, options,
+              q_text: item.q_text, options: item.options,
               correct_index: typeof r.answer==='number'?r.answer: typeof r.correct_index==='number'?r.correct_index: letterToIndex(r.answer||r.correct),
-              explanation_url: explUp.url || null,
-              image_url,
+              explanation_url: item.explUrl || null,
+              image_url: item.image_url,
               subject: r.subject || detection.subject || g.folderName,
-              order_index: baseIndex + i,
-            });
-          }
+              order_index: baseIndex + item.i,
+            };
+          });
+          const payload = built.filter(Boolean);
 
           const CHUNK = 500;
           for(let start=0; start<payload.length; start+=CHUNK){
@@ -3791,10 +3870,11 @@ async function generateSetsForFolder(folder){
     const bySubject={};
     (qs||[]).forEach(q=>{ (bySubject[q.subject||folder.name]=bySubject[q.subject||folder.name]||[]).push(q.id); });
     for(const subj in bySubject){
-      setsToInsert = setsToInsert.concat(chunkToSets(bySubject[subj], cfg.perSet, cfg.minutesPerFull, subj));
+      setsToInsert = setsToInsert.concat(chunkToSets(bySubject[subj], effectivePerSet(bySubject[subj].length, cfg), cfg.minutesPerFull, subj));
     }
   } else {
-    setsToInsert = chunkToSets((qs||[]).map(q=>q.id), cfg.perSet, cfg.minutesPerFull, null);
+    const ids = (qs||[]).map(q=>q.id);
+    setsToInsert = chunkToSets(ids, effectivePerSet(ids.length, cfg), cfg.minutesPerFull, null);
   }
   if(setsToInsert.length){
     await sb.from('sets').insert(setsToInsert.map(s=>({...s, qbank_id:folder.qbank_id, folder_id:folder.id})));
@@ -3948,15 +4028,22 @@ async function adminCleanup(){
     exBtn.disabled = true;
     const st = document.getElementById('cleanExplStatus');
     const { data: rows } = await sb.from('questions').select('id, explanation').not('explanation','is',null).is('explanation_url', null).limit(2000);
-    let done=0, failed=0;
-    for(const row of rows||[]){
-      st.textContent = `Migrating… ${done+failed}/${rows.length}`;
-      const up = await uploadExplanationToCloudflare(row.explanation);
-      if(up.url){
-        const { error } = await sb.from('questions').update({explanation_url: up.url, explanation: null}).eq('id', row.id);
-        if(error) failed++; else done++;
-      } else failed++;
-    }
+    const all = rows||[];
+    const BATCH = 50;
+    const chunks = [];
+    for(let b=0; b<all.length; b+=BATCH) chunks.push(all.slice(b, b+BATCH));
+    let done=0, failed=0, chunkDone=0;
+    await mapWithConcurrency(chunks, 15, async (chunk)=>{
+      const obj = {};
+      chunk.forEach(row=>{ if(row.explanation && row.explanation.trim()) obj[row.id] = row.explanation; });
+      const up = await uploadToCloudflare(new File([JSON.stringify(obj)], 'explanations.json', {type:'application/json'}));
+      chunkDone++;
+      st.textContent = `Migrating… batch ${chunkDone}/${chunks.length}`;
+      if(up.error){ failed += chunk.length; return; }
+      const ids = chunk.map(r=>r.id);
+      const { error } = await sb.from('questions').update({explanation_url: up.url, explanation: null}).in('id', ids);
+      if(error) failed += chunk.length; else done += chunk.length;
+    });
     st.textContent = `Done — ${done} migrated${failed?`, ${failed} failed (left as-is, safe to try again later)`:''}.`;
   };
 }
