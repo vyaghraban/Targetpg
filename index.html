@@ -531,7 +531,7 @@ const SUBJECT_ALIASES = {
   'Dermatology':                 ['dermatology','derma','dvl','skin'],
 };
 function detectSubject(name){
-  const tokens = String(name||'').toLowerCase().replace(/\.(json|ndjson|txt)$/,'').split(/[^a-z0-9]+/).filter(Boolean);
+  const tokens = String(name||'').toLowerCase().replace(/\.(json|ndjson|txt)(\.gz)?$/,'').replace(/\.gz$/,'').split(/[^a-z0-9]+/).filter(Boolean);
   for(const tok of tokens){
     for(const subj in SUBJECT_ALIASES){
       if(SUBJECT_ALIASES[subj].includes(tok)) return subj;
@@ -561,7 +561,7 @@ const PLATFORM_ALIASES = {
   'DAMS': ['dams'],
 };
 function detectPlatformName(name){
-  const lower = String(name||'').toLowerCase().replace(/\.(json|ndjson|txt)$/,'');
+  const lower = String(name||'').toLowerCase().replace(/\.(json|ndjson|txt)(\.gz)?$/,'').replace(/\.gz$/,'');
   const tokens = lower.split(/[^a-z0-9]+/).filter(Boolean);
   const squashed = tokens.join(''); // handles multi-word platform names like "Doc Tutorial" -> "doctutorial"
   for(const platform in PLATFORM_ALIASES){
@@ -2705,11 +2705,12 @@ async function startAttempt(setId, presetSet){
     const ins = await sb.from('attempts').insert({user_id:S.profile.id, set_id:setId, answers:initAnswers}).select().maybeSingle();
     att = ins.data;
   }
-  const elapsedSec = Math.floor((Date.now()-new Date(att.started_at).getTime())/1000);
+  const pausedSoFar = (att.paused_seconds||0) + (att.pause_started_at ? Math.floor((Date.now()-new Date(att.pause_started_at).getTime())/1000) : 0);
+  const elapsedSec = Math.floor((Date.now()-new Date(att.started_at).getTime())/1000) - pausedSoFar;
   const totalSec = Math.round(set.duration_minutes*60);
   if(elapsedSec >= totalSec){ await submitAttempt(att, set, ordered, true); return; }
-  goTo({ exam:{ set, att, questions:ordered, idx:0, totalSec, elapsedAtLoad:elapsedSec }, view:'exam' });
-  startTimer();
+  goTo({ exam:{ set, att, questions:ordered, idx:0, totalSec, elapsedAtLoad:elapsedSec, paused: !!att.pause_started_at }, view:'exam' });
+  if(!att.pause_started_at) startTimer();
 }
 // Fetches a single question's image_url on demand (undefined = not fetched
 // yet, null = fetched and confirmed there isn't one). Calls onLoaded() once
@@ -2746,6 +2747,30 @@ function ensureQuestionExplanation(q, onLoaded){
   })();
 }
 let timerHandle=null;
+// Pauses the running exam: freezes the on-screen timer immediately and
+// records the pause moment on the attempt row, so even if the app is
+// closed/reloaded while paused, re-opening it still shows the paused
+// screen with the same time remaining (see the pausedSoFar calc above).
+async function pauseExam(){
+  if(!S.exam || S.exam.paused) return;
+  clearInterval(timerHandle);
+  const nowIso = new Date().toISOString();
+  S.exam.paused = true;
+  S.exam.att.pause_started_at = nowIso;
+  renderExam();
+  await sb.from('attempts').update({pause_started_at: nowIso}).eq('id', S.exam.att.id);
+}
+async function resumeExam(){
+  if(!S.exam || !S.exam.paused) return;
+  const att = S.exam.att;
+  const pausedNow = Math.floor((Date.now()-new Date(att.pause_started_at).getTime())/1000);
+  att.paused_seconds = (att.paused_seconds||0) + pausedNow;
+  att.pause_started_at = null;
+  S.exam.paused = false;
+  renderExam();
+  startTimer();
+  await sb.from('attempts').update({paused_seconds: att.paused_seconds, pause_started_at: null}).eq('id', att.id);
+}
 function startTimer(){
   clearInterval(timerHandle);
   const t0 = Date.now();
@@ -2766,9 +2791,24 @@ function startTimer(){
 function renderExam(){
   const { set, att, questions, idx } = S.exam;
   const q = questions[idx];
+  const timerHtml = `<span class="timer-ring" id="examTimerRing" style="--pct:${Math.max(0,Math.min(100,(S.exam.totalSec-S.exam.elapsedAtLoad)/S.exam.totalSec*100))}"><span class="timer" id="examTimer">${fmtTime(S.exam.totalSec-S.exam.elapsedAtLoad)}</span></span>`;
+  if(S.exam.paused){
+    app.innerHTML = `<div class="topbar"><div class="row" style="gap:10px;align-items:center;"><button class="ghost" id="exitExamBtn" style="padding:8px 12px;font-size:12px;min-height:auto;">← Back</button><div class="brand"><span class="dot"></span>Set ${set.set_number||''} ${set.category?('· '+set.category.replace('_',' ')):''}</div></div>${timerHtml}</div>
+    <div class="container">
+      <div class="card" style="text-align:center;padding:44px 20px;">
+        <div style="font-size:40px;margin-bottom:10px;">⏸️</div>
+        <h3>Test paused</h3>
+        <p class="muted">Your time is frozen — nothing is ticking down while you're away. Tap Resume whenever you're ready to continue.</p>
+        <button class="primary" id="resumeExamBtn" style="margin-top:14px;">▶ Resume test</button>
+      </div>
+    </div>`;
+    document.getElementById('resumeExamBtn').onclick = resumeExam;
+    document.getElementById('exitExamBtn').onclick = ()=>{ history.back(); };
+    return;
+  }
   if(att.answers[q.id].status==='not_visited') att.answers[q.id].status='not_answered';
   ensureQuestionImage(q, ()=>{ if(S.exam && S.exam.questions[S.exam.idx] === q) renderExam(); });
-  app.innerHTML = `<div class="topbar"><div class="row" style="gap:10px;align-items:center;"><button class="ghost" id="exitExamBtn" style="padding:8px 12px;font-size:12px;min-height:auto;">← Back</button><div class="brand"><span class="dot"></span>Set ${set.set_number||''} ${set.category?('· '+set.category.replace('_',' ')):''}</div></div><span class="timer-ring" id="examTimerRing" style="--pct:${Math.max(0,Math.min(100,(S.exam.totalSec-S.exam.elapsedAtLoad)/S.exam.totalSec*100))}"><span class="timer" id="examTimer">${fmtTime(S.exam.totalSec-S.exam.elapsedAtLoad)}</span></span></div>
+  app.innerHTML = `<div class="topbar"><div class="row" style="gap:10px;align-items:center;"><button class="ghost" id="exitExamBtn" style="padding:8px 12px;font-size:12px;min-height:auto;">← Back</button><div class="brand"><span class="dot"></span>Set ${set.set_number||''} ${set.category?('· '+set.category.replace('_',' ')):''}</div></div><div class="row" style="gap:10px;align-items:center;"><button class="ghost" id="pauseExamBtn" style="padding:8px 12px;font-size:12px;min-height:auto;">⏸ Pause</button>${timerHtml}</div></div>
   <div class="exam-shell">
     <div class="exam-main">
       <div class="qmeta">Question ${idx+1} of ${questions.length}</div>
@@ -2803,6 +2843,7 @@ function renderExam(){
   document.getElementById('submitSet').onclick=()=>{
     if(confirm('Submit this set now? You cannot resume it after submission.')) submitAttempt(att,set,questions,false);
   };
+  document.getElementById('pauseExamBtn').onclick = pauseExam;
   document.getElementById('exitExamBtn').onclick=()=>{
     saveAttemptSoft();
     // Go through the same path as the phone's back button/gesture, so both
@@ -3131,7 +3172,7 @@ async function renderAdmin(){
 }
 
 function prettifyName(filename){
-  let n = filename.replace(/\.(ndjson|json|txt)$/i,'');
+  let n = filename.replace(/\.(ndjson|json|txt)(\.gz)?$/i,'').replace(/\.gz$/i,'');
   n = n.replace(/[_-]+/g,' ').trim();
   return n.replace(/\w\S*/g, w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
 }
@@ -3202,9 +3243,9 @@ async function adminUpload(){
     <datalist id="subfolderList"></datalist>
     <label>Subject / Topic (optional, e.g. "Anatomy" — the actual section admin generates a pattern for)</label>
     <input id="qbSubject" placeholder="e.g. Anatomy — leave blank to use the filename">
-    <label>Files — .json / .ndjson, or a .zip full of them (select multiple)</label>
-    <input id="qbFiles" type="file" accept=".json,.ndjson,.txt,.zip" multiple>
-    <p class="muted" style="margin:-4px 0 10px;font-size:12px;">Drop a whole platform's .zip in here — every .json/.ndjson inside is read automatically. A row's own "folder" field always wins; otherwise, a file's own folder path inside the zip (e.g. "qbank/Anatomy.json") is used as its section name.</p>
+    <label>Files — .json / .ndjson / .gz, or a .zip full of them (select multiple)</label>
+    <input id="qbFiles" type="file" accept=".json,.ndjson,.txt,.zip,.gz" multiple>
+    <p class="muted" style="margin:-4px 0 10px;font-size:12px;">Drop a whole platform's .zip in here — every .json/.ndjson inside is read automatically. Gzip-compressed files (.gz) are decompressed right in the browser, no need to unzip them yourself first. A row's own "folder" field always wins; otherwise, a file's own folder path inside the zip (e.g. "qbank/Anatomy.json") is used as its section name.</p>
     <label>Images (optional) — select every image file your JSON refers to by filename</label>
     <input id="qbImages" type="file" accept="image/*" multiple>
     <button class="primary" id="qbUpload" style="margin-top:14px;">Parse & upload</button>
@@ -3344,11 +3385,23 @@ async function adminUpload(){
     const groups = new Map(); // `${qbankId}::${folderName}` -> {qbankId, qbankLabel, folderName, rows:[]}
     const qbankCache = new Map();
     let totalRows = 0;
+// Reads a picked file as text, transparently decompressing it first if
+// it's a .gz — uses the browser's built-in DecompressionStream (no
+// library needed). Regular .json/.ndjson/.txt files (and the already-
+// decompressed entries pulled out of a .zip) are read as before.
+async function readUploadFileAsText(file){
+  if(/\.gz$/i.test(file.name) && typeof file.stream === 'function'){
+    const ds = new DecompressionStream('gzip');
+    return await new Response(file.stream().pipeThrough(ds)).text();
+  }
+  return await file.text();
+}
+
     for(let fi=0; fi<files.length; fi++){
       const file = files[fi];
       st.textContent = `Reading files… ${fi+1}/${files.length} (${file.name})`;
       try{
-        const text = await file.text();
+        const text = await readUploadFileAsText(file);
         let rows=[];
         try{ const parsed=JSON.parse(text); rows = Array.isArray(parsed)?parsed:[parsed]; }
         catch(e){ rows = text.split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{ try{return JSON.parse(l);}catch(_){return null;} }).filter(Boolean); }
