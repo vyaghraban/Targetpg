@@ -705,7 +705,7 @@ window.addEventListener('popstate', ()=>{
   if(S.exam){
     clearInterval(timerHandle);
     clearTimeout(saveTimeout);
-    sb.from('attempts').update({answers:S.exam.att.answers}).eq('id', S.exam.att.id);
+    idbSaveAnswers(S.exam.att.id, S.exam.att.answers);
   }
   if(navStack.length){
     const prev = navStack.pop();
@@ -1920,10 +1920,9 @@ async function openReviewForSet(setId){
   const { data: s } = await sb.from('sets').select('*').eq('id', setId).maybeSingle();
   const { data: att } = await sb.from('attempts').select('*').eq('user_id', S.profile.id).eq('set_id', setId).eq('status','submitted').order('submitted_at',{ascending:false}).limit(1).maybeSingle();
   if(!s || !att){ toast('No completed attempt to review yet'); return; }
-  // Same reasoning as startAttempt: skip the (possibly large, embedded-base64)
-  // image_url in this bulk fetch so review opens quickly; images are loaded
-  // lazily per-question as you page through (see ensureQuestionImage).
-  const { data: qs } = await sb.from('questions').select('id, q_text, options, correct_index, explanation, subject, is_controversial').in('id', s.question_ids);
+  att.answers = (await idbGetAnswers(att.id)) || {};
+  const { data: qsRaw } = await sb.from('questions').select('id, correct_index, image_url, batch_id, content_batches(url), order_index, subject, is_controversial').in('id', s.question_ids);
+  const qs = await hydrateQuestionsContent(qsRaw);
   const questions = s.question_ids.map(id=>qs.find(q=>q.id===id)).filter(Boolean);
   // Community accuracy per question, fetched once for the whole set (not
   // per question) so paging through review stays instant.
@@ -1938,10 +1937,12 @@ async function loadFullTestReview(folderId){
   for(const s of sets){
     const { data: att } = await sb.from('attempts').select('*').eq('user_id', S.profile.id).eq('set_id', s.id).eq('status','submitted').order('submitted_at',{ascending:false}).limit(1).maybeSingle();
     if(!att){ toast('Complete every section first'); return; }
-    const { data: qs } = await sb.from('questions').select('id, q_text, options, correct_index, explanation, subject, is_controversial').in('id', s.question_ids);
+    const localAnswers = (await idbGetAnswers(att.id)) || {};
+    const { data: qsRaw } = await sb.from('questions').select('id, correct_index, image_url, batch_id, content_batches(url), order_index, subject, is_controversial').in('id', s.question_ids);
+    const qs = await hydrateQuestionsContent(qsRaw);
     const ordered = s.question_ids.map(id=>qs.find(q=>q.id===id)).filter(Boolean);
     allQuestions = allQuestions.concat(ordered);
-    Object.assign(mergedAnswers, att.answers);
+    Object.assign(mergedAnswers, localAnswers);
     totalScore += (att.score||0); totalCorrect += (att.correct_count||0); totalQ += (att.total_questions||ordered.length);
   }
   const fakeAtt = { id:null, answers: mergedAnswers, score: totalScore, correct_count: totalCorrect, total_questions: totalQ };
@@ -2494,7 +2495,14 @@ async function loadResultsTab(){
   const rankBySet = {};
   setIds.forEach((sid,i)=>{ const r = rankResults[i].data; rankBySet[sid] = Array.isArray(r)?r[0]:r; });
 
-  let html = `<div class="card"><h3>🏅 My Results</h3><p class="muted">Every set you've submitted — qbank sets, category decks, and custom modules (yours or shared with you) — with your latest rank and percentile.</p></div>`;
+  let html = `<div class="card"><h3>🏅 My Results</h3><p class="muted">Every set you've submitted — qbank sets, category decks, and custom modules (yours or shared with you) — with your latest rank and percentile.</p>
+    <div class="row" style="margin-top:12px;gap:8px;flex-wrap:wrap;">
+      <button class="subtle" id="exportAnswersBtn">⬇️ Export my answers</button>
+      <label class="subtle iconbtn" style="cursor:pointer;">⬆️ Import answers<input type="file" id="importAnswersFile" accept=".json" style="display:none;"></label>
+    </div>
+    <p class="muted" style="font-size:11.5px;margin-top:6px;">Your detailed answers (for reviewing what you picked) live only on this device. Export before switching phones or clearing browser data, then import on the new device to bring them along — your score and rank are always safe on the server either way.</p>
+    <div id="exportImportStatus" class="muted" style="font-size:12px;margin-top:4px;"></div>
+  </div>`;
   attempts.forEach(att=>{
     const s = setsById[att.set_id];
     if(!s) return;
@@ -2531,6 +2539,33 @@ async function loadResultsTab(){
   body.querySelectorAll('[data-fullrank]').forEach(b=>{
     b.onclick = ()=> viewCustomRankList(b.dataset.fullrank);
   });
+  document.getElementById('exportAnswersBtn').onclick = async ()=>{
+    const st = document.getElementById('exportImportStatus');
+    st.textContent = 'Preparing export…';
+    const records = await idbGetAllRecords();
+    const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), user: S.profile.email, records })], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `qbank-answers-${new Date().toISOString().slice(0,10)}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    st.textContent = `Exported ${records.length} attempt(s)' answers.`;
+  };
+  document.getElementById('importAnswersFile').onchange = async (e)=>{
+    const file = e.target.files[0]; if(!file) return;
+    const st = document.getElementById('exportImportStatus');
+    st.textContent = 'Importing…';
+    try{
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const records = Array.isArray(parsed) ? parsed : (parsed.records||[]);
+      await idbImportRecords(records);
+      st.textContent = `Imported ${records.length} attempt(s)' answers — review will now show them on this device.`;
+    }catch(err){
+      st.textContent = 'Import failed — is this a valid exported file? ('+err.message+')';
+    }
+    e.target.value = '';
+  };
 }
 function upiPayLink(plan){
   const note = encodeURIComponent(`${plan.name} plan - ${S.profile.email||''}`);
@@ -2578,7 +2613,7 @@ async function loadSubTab(){
     html += `<div class="card"><h3>${p.name}</h3>
       <div class="stat-big">${pct?`<span style="text-decoration:line-through;font-size:16px;color:var(--text-dim);">₹${p.price}</span> `:''}₹${finalPrice}</div>
       ${pct?`<div class="muted" style="font-size:12px;">${pct}% off applied</div>`:''}
-      <div class="muted">${p.duration_days} days</div>
+      <div class="muted">${p.duration_days} days · ${p.device_limit||1} device${(p.device_limit||1)>1?'s':''}</div>
       <a href="${upiPayLink({...p, price:finalPrice})}"><button class="primary" style="width:100%;margin-top:12px;">Pay ₹${finalPrice} via UPI</button></a>
       <button class="subtle" data-showform="${p.id}" style="width:100%;margin-top:8px;">I've paid — notify admin</button>
       <div id="payForm-${p.id}" style="display:none;margin-top:10px;">
@@ -2723,18 +2758,18 @@ async function getSessionTiming(att, set){
 async function startAttempt(setId, presetSet, forcedSessionStart){
   const set = presetSet || (await sb.from('sets').select('*').eq('id', setId).maybeSingle()).data;
   let { data: att } = await sb.from('attempts').select('*').eq('user_id', S.profile.id).eq('set_id', setId).eq('status','in_progress').maybeSingle();
-  // Deliberately excludes image_url: some questions now carry embedded
-  // base64 images (can be several hundred KB each), and pulling that for
-  // every question in the set up front is what was making a set take so
-  // long to open. Text loads instantly; each question's image is fetched
-  // lazily (see ensureQuestionImage) only once you're actually viewing it.
-  const { data: questions } = await sb.from('questions')
-    .select('id, q_text, options, correct_index, explanation_url, order_index, subject, is_controversial')
+  // q_text/options/explanation live on Cloudflare now (see batch_id -> content_batches) —
+  // this only pulls the lightweight metadata from Postgres, then
+  // hydrateQuestionsContent fills in the actual text from a handful of
+  // shared batch files (usually 1-2 for a whole set).
+  const { data: questionsRaw } = await sb.from('questions')
+    .select('id, correct_index, image_url, batch_id, content_batches(url), order_index, subject, is_controversial')
     .in('id', set.question_ids);
+  const questions = await hydrateQuestionsContent(questionsRaw);
   const ordered = set.question_ids.map(id=>questions.find(q=>q.id===id)).filter(Boolean);
   if(!att){
     const initAnswers={}; ordered.forEach(q=>initAnswers[q.id]={selected:null,status:'not_visited'});
-    const payload = {user_id:S.profile.id, set_id:setId, answers:initAnswers};
+    const payload = {user_id:S.profile.id, set_id:setId};
     if(set.session_id){
       let sessionStart = forcedSessionStart;
       if(!sessionStart){
@@ -2751,6 +2786,21 @@ async function startAttempt(setId, presetSet, forcedSessionStart){
     }
     const ins = await sb.from('attempts').insert(payload).select().maybeSingle();
     att = ins.data;
+    att.answers = initAnswers;
+    await idbSaveAnswers(att.id, initAnswers);
+  } else {
+    const local = await idbGetAnswers(att.id);
+    if(local){
+      att.answers = local;
+    } else {
+      // No local copy on this device (different device, or storage was
+      // cleared) — start this set's answers fresh here rather than crash;
+      // any progress recorded elsewhere stays on that device unless
+      // exported/imported.
+      const initAnswers={}; ordered.forEach(q=>initAnswers[q.id]={selected:null,status:'not_visited'});
+      att.answers = initAnswers;
+      await idbSaveAnswers(att.id, initAnswers);
+    }
   }
   let elapsedSec, totalSec;
   if(set.session_id){
@@ -2765,10 +2815,42 @@ async function startAttempt(setId, presetSet, forcedSessionStart){
   goTo({ exam:{ set, att, questions:ordered, idx:0, totalSec, elapsedAtLoad:elapsedSec, paused: !!att.pause_started_at }, view:'exam' });
   if(!att.pause_started_at) startTimer();
 }
+// Content batch files (created at upload time — see the upload pipeline)
+// hold {q, o, e} for up to 50 questions each, keyed by order_index. Cached
+// by URL so many questions sharing one batch (the normal case — a whole
+// set usually shares 1-2 batches) only ever fetch it once.
+const _contentBatchCache = new Map();
+function fetchContentBatch(url){
+  if(!_contentBatchCache.has(url)){
+    _contentBatchCache.set(url, fetch(url).then(res=> res.ok ? res.json() : {}).catch(()=>({})));
+  }
+  return _contentBatchCache.get(url);
+}
+// Takes question rows straight from Supabase (id, correct_index, image_url,
+// Takes question rows straight from Supabase (id, correct_index, image_url,
+// batch_id + the joined content_batches(url), order_index, ...) and fills
+// in q_text/options/explanation — from the shared Cloudflare batch for new
+// rows (batch_id set), or straight from the row's own columns for old rows
+// uploaded before this batching existed (batch_id null, text sitting in
+// the DB columns).
+async function hydrateQuestionsContent(rows){
+  const urls = [...new Set((rows||[]).filter(r=>r.content_batches?.url).map(r=>r.content_batches.url))];
+  const batches = {};
+  await Promise.all(urls.map(async u=>{ batches[u] = await fetchContentBatch(u); }));
+  return (rows||[]).map(r=>{
+    const url = r.content_batches?.url;
+    if(url){
+      const c = (batches[url]||{})[r.order_index] || {};
+      return { ...r, q_text: c.q||'', options: c.o||[], explanation: c.e||'' };
+    }
+    return r;
+  });
+}
 // Fetches a single question's image_url on demand (undefined = not fetched
 // yet, null = fetched and confirmed there isn't one). Calls onLoaded() once
 // it arrives so the caller can re-render if the user is still looking at
-// this exact question — used from both the exam player and review screens.
+// this exact question — used for OLD rows uploaded before content batching
+// existed. New rows already carry image_url from the initial select.
 function ensureQuestionImage(q, onLoaded){
   if(q.image_url !== undefined || q._imgFetching) return;
   q._imgFetching = true;
@@ -2777,43 +2859,6 @@ function ensureQuestionImage(q, onLoaded){
     q._imgFetching = false;
     if(onLoaded) onLoaded();
   });
-}
-// Same lazy-load idea, for explanations. New rows carry `explanation_url`
-// (a .txt file on Cloudflare) — fetched directly, no database round trip
-// needed at all. Older rows from before this change may still have the
-// full text sitting in the `explanation` column instead; those are
-// supported too (falls back to a normal Supabase select).
-// Batch explanation files are shared by up to 50 questions — cache each
-// one by URL so reviewing a whole set only fetches its batch file once,
-// not once per question.
-const _explBatchCache = new Map();
-function fetchExplanationBatch(url){
-  if(!_explBatchCache.has(url)){
-    _explBatchCache.set(url, fetch(url).then(res=> res.ok ? res.json() : {}).catch(()=>({})));
-  }
-  return _explBatchCache.get(url);
-}
-function ensureQuestionExplanation(q, onLoaded){
-  if(q.explanation !== undefined || q._explFetching) return;
-  q._explFetching = true;
-  (async ()=>{
-    let text = null;
-    if(q.explanation_url){
-      try{
-        const batch = await fetchExplanationBatch(q.explanation_url);
-        // order_index: how new (set-wise-batched) uploads key each entry.
-        // id: how the Cleanup tool's one-off migration of old rows keys
-        // entries when it processes existing questions individually.
-        text = (batch[q.order_index] ?? batch[q.id]) ?? null;
-      }catch(e){ text = null; }
-    } else {
-      const { data } = await sb.from('questions').select('explanation').eq('id', q.id).maybeSingle();
-      text = data ? data.explanation : null;
-    }
-    q.explanation = text;
-    q._explFetching = false;
-    if(onLoaded) onLoaded();
-  })();
 }
 let timerHandle=null;
 // Pauses the running exam: freezes the on-screen timer immediately and
@@ -2939,10 +2984,72 @@ function renderPalette(){
   document.querySelectorAll('.pnum').forEach(p=>p.onclick=()=>{ saveAttemptSoft(); S.exam.idx=+p.dataset.i; renderExam(); });
 }
 let saveTimeout=null;
+// ================= LOCAL ANSWER STORAGE (IndexedDB) =================
+// Answers (which option the user picked for each question) live on THIS
+// DEVICE only, not in Supabase — this is what an attempt row used to carry
+// around and is the main reason it was heavy. Only the score/correct-count/
+// status (needed for rank comparisons and history) go to Supabase now.
+// Tradeoff: review/answers only work on the device that took the test,
+// unless the user exports and re-imports their local data on another
+// device (see the Export/Import buttons on the Results tab).
+const IDB_NAME = 'qbank_local', IDB_STORE = 'answers';
+function idbOpen(){
+  return new Promise((resolve, reject)=>{
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = ()=>{
+      const db = req.result;
+      if(!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE, { keyPath: 'attemptId' });
+    };
+    req.onsuccess = ()=> resolve(req.result);
+    req.onerror = ()=> reject(req.error);
+  });
+}
+async function idbSaveAnswers(attemptId, answers){
+  try{
+    const db = await idbOpen();
+    await new Promise((resolve, reject)=>{
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).put({ attemptId, answers, updatedAt: Date.now() });
+      tx.oncomplete = resolve; tx.onerror = ()=>reject(tx.error);
+    });
+  }catch(e){ console.error('local answer save failed', e); }
+}
+async function idbGetAnswers(attemptId){
+  try{
+    const db = await idbOpen();
+    return await new Promise((resolve, reject)=>{
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const req = tx.objectStore(IDB_STORE).get(attemptId);
+      req.onsuccess = ()=> resolve(req.result ? req.result.answers : null);
+      req.onerror = ()=> reject(req.error);
+    });
+  }catch(e){ return null; }
+}
+async function idbGetAllRecords(){
+  try{
+    const db = await idbOpen();
+    return await new Promise((resolve, reject)=>{
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const req = tx.objectStore(IDB_STORE).getAll();
+      req.onsuccess = ()=> resolve(req.result||[]);
+      req.onerror = ()=> reject(req.error);
+    });
+  }catch(e){ return []; }
+}
+async function idbImportRecords(records){
+  const db = await idbOpen();
+  await new Promise((resolve, reject)=>{
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    const store = tx.objectStore(IDB_STORE);
+    (records||[]).forEach(r=>{ if(r && r.attemptId) store.put(r); });
+    tx.oncomplete = resolve; tx.onerror = ()=>reject(tx.error);
+  });
+}
+
 function saveAttemptSoft(){
   clearTimeout(saveTimeout);
   saveTimeout=setTimeout(async ()=>{
-    await sb.from('attempts').update({answers:S.exam.att.answers}).eq('id', S.exam.att.id);
+    await idbSaveAnswers(S.exam.att.id, S.exam.att.answers);
   }, 400);
 }
 // Once the LAST set of a session is submitted, this merges every set's
@@ -2956,15 +3063,17 @@ async function buildSessionCombinedReview(sessionId){
   const { data: sessAttempts } = await sb.from('attempts').select('*').eq('user_id', S.profile.id).in('set_id', setIds).eq('status','submitted');
   const attemptsBySet = {}; (sessAttempts||[]).forEach(a=>{ attemptsBySet[a.set_id]=a; });
   let allQuestionIds = [], combinedAnswers = {}, totalScore=0, totalCorrect=0, totalQ=0;
-  (sessSets||[]).forEach(s=>{
+  for(const s of (sessSets||[])){
     allQuestionIds = allQuestionIds.concat(s.question_ids);
     const a = attemptsBySet[s.id];
     if(a){
-      Object.assign(combinedAnswers, a.answers||{});
+      const localAnswers = (await idbGetAnswers(a.id)) || {};
+      Object.assign(combinedAnswers, localAnswers);
       totalScore += a.score||0; totalCorrect += a.correct_count||0; totalQ += a.total_questions||0;
     }
-  });
-  const { data: qRows } = await sb.from('questions').select('id, q_text, options, correct_index, explanation_url, order_index, subject, is_controversial').in('id', allQuestionIds);
+  }
+  const { data: qRowsRaw } = await sb.from('questions').select('id, correct_index, image_url, batch_id, content_batches(url), order_index, subject, is_controversial').in('id', allQuestionIds);
+  const qRows = await hydrateQuestionsContent(qRowsRaw);
   const orderedQuestions = allQuestionIds.map(id=>(qRows||[]).find(q=>q.id===id)).filter(Boolean);
   return {
     att: { id:'session-'+sessionId, answers: combinedAnswers, status:'submitted', score: totalScore, correct_count: totalCorrect, total_questions: totalQ },
@@ -2985,7 +3094,8 @@ async function submitAttempt(att, set, questions, auto){
       statPairs.push({ questionId: q.id, wasCorrect });
     }
   }
-  await sb.from('attempts').update({answers:att.answers, status:'submitted', submitted_at:new Date().toISOString(), score, correct_count:correctCount, total_questions:qs.length}).eq('id', att.id);
+  await idbSaveAnswers(att.id, att.answers);
+  await sb.from('attempts').update({status:'submitted', submitted_at:new Date().toISOString(), score, correct_count:correctCount, total_questions:qs.length}).eq('id', att.id);
   bumpQuestionStats(statPairs).catch(e=>console.error('question stats update failed', e));
   att.status='submitted'; att.score=score;
 
@@ -3098,7 +3208,6 @@ async function renderReview(withExpl, i=0, wrongOnly=false){
   i = Math.max(0, Math.min(i, questions.length-1));
   const q = questions[i]; const a = att.answers[q.id];
   ensureQuestionImage(q, ()=>{ if(S.review && S.review.questions[S.review.questions.indexOf(q)]===q) renderReview(withExpl, i, wrongOnly); });
-  if(withExpl) ensureQuestionExplanation(q, ()=>{ if(S.review && S.review.questions[S.review.questions.indexOf(q)]===q) renderReview(withExpl, i, wrongOnly); });
   const { data: existingCat } = await sb.from('categorizations').select('category').eq('user_id', S.profile.id).eq('question_id', q.id).maybeSingle();
   const acc = q._acc;
   const accPct = acc && acc.total_attempts ? Math.round((acc.correct_attempts/acc.total_attempts)*1000)/10 : null;
@@ -3631,7 +3740,7 @@ async function readUploadFileAsText(file){
           let prepDone = 0;
           // Step 1: resolve every row's text fields in parallel. No network
           // calls here except the rare embedded-base64-image case — the
-          // heavy explanation upload is deliberately NOT done per-row (see
+          // heavy content upload is deliberately NOT done per-row (see
           // step 2 below).
           const resolved = await mapWithConcurrency(rowsToProcess, 30, async (r, i)=>{
             const q_text = await resolveInlineImagesAsync(r.question||r.q_text||r.q||'', imageMap);
@@ -3644,42 +3753,50 @@ async function readUploadFileAsText(file){
             }
             return { r, i, q_text, options, explanationText, image_url };
           });
-          // Step 2: batch explanations in groups of 50 (matching the default
-          // set size) — one Cloudflare upload per batch of questions instead
-          // of one per question. This is what actually cuts the number of
-          // network requests down (e.g. 113,888 questions -> ~2,300 batch
-          // files), since each request has real network latency that adds
-          // up fast at six-figure question counts. Keyed by order_index, so
-          // the review screen can pull just its own question's text back
-          // out of the shared batch file (see ensureQuestionExplanation).
-          const EXPL_BATCH_SIZE = 50;
+          // Step 2: batch q_text + options + explanation TOGETHER in groups
+          // of 50 (matching the default set size) — one Cloudflare upload
+          // per batch of questions, not three (one each for text/options/
+          // explanation) and not one per question. This is what actually
+          // cuts the number of network requests down (e.g. 113,888
+          // questions -> ~2,300 batch files total, not 341,664), and means
+          // opening a set only ever needs ONE extra fetch to get everything
+          // it needs to display. Keyed by order_index — see
+          // ensureQuestionContent, which pulls a single question's own
+          // {q,o,e} back out of its shared batch file. The database itself
+          // only ever stores correct_index, image_url, subject and this one
+          // batch_id per question — never the question/option/
+          // explanation text itself.
+          const CONTENT_BATCH_SIZE = 50;
           const batches = [];
-          for(let b=0; b<resolved.length; b+=EXPL_BATCH_SIZE) batches.push(resolved.slice(b, b+EXPL_BATCH_SIZE));
+          for(let b=0; b<resolved.length; b+=CONTENT_BATCH_SIZE) batches.push(resolved.slice(b, b+CONTENT_BATCH_SIZE));
           let batchDone = 0;
           await mapWithConcurrency(batches, 15, async (batch)=>{
             const obj = {};
-            let any = false;
             batch.forEach(item=>{
-              if(item.explanationText && item.explanationText.trim()){ obj[baseIndex+item.i] = item.explanationText; any = true; }
+              obj[baseIndex+item.i] = { q: item.q_text, o: item.options, e: item.explanationText||'' };
             });
-            let url = null;
-            if(any){
-              const up = await uploadToCloudflare(new File([JSON.stringify(obj)], 'explanations.json', {type:'application/json'}));
-              url = up.error ? null : up.url;
+            const up = await uploadToCloudflare(new File([JSON.stringify(obj)], 'content.json', {type:'application/json'}));
+            let batchId = null;
+            if(!up.error){
+              // Storing the URL once here (and just a small batch_id on
+              // each question row below) instead of repeating the same
+              // ~65-character URL on all 50 rows saves a meaningful chunk
+              // of database space at six-figure question counts.
+              const { data: cb } = await sb.from('content_batches').insert({url: up.url}).select().maybeSingle();
+              batchId = cb ? cb.id : null;
             }
-            batch.forEach(item=>{ item.explUrl = url; });
+            batch.forEach(item=>{ item.batchId = batchId; });
             batchDone++;
-            if(batches.length>1) st.textContent = `Uploading explanations… batch ${batchDone}/${batches.length}`;
+            if(batches.length>1) st.textContent = `Uploading to Cloudflare… batch ${batchDone}/${batches.length}`;
           });
           const built = resolved.map(item=>{
-            if(!item.q_text || !item.options?.length) return null;
+            if(!item.q_text || !item.options?.length || !item.batchId) return null;
             const r = item.r;
             return {
               qbank_id: g.qbankId,
               folder_id: folder.id,
-              q_text: item.q_text, options: item.options,
+              batch_id: item.batchId,
               correct_index: typeof r.answer==='number'?r.answer: typeof r.correct_index==='number'?r.correct_index: letterToIndex(r.answer||r.correct),
-              explanation_url: item.explUrl || null,
               image_url: item.image_url,
               subject: r.subject || detection.subject || g.folderName,
               order_index: baseIndex + item.i,
@@ -4080,10 +4197,10 @@ async function adminCleanup(){
   body.innerHTML = `<div class="card muted">Checking…</div>`;
 
   const cutoff = new Date(Date.now() - 30*24*60*60*1000).toISOString();
-  const [{ count: abandonedCount }, { count: base64Count }, { count: explCount }] = await Promise.all([
+  const [{ count: abandonedCount }, { count: base64Count }, { count: legacyCount }] = await Promise.all([
     sb.from('attempts').select('id', {count:'exact', head:true}).eq('status','in_progress').lt('started_at', cutoff),
     sb.from('questions').select('id', {count:'exact', head:true}).like('image_url', 'data:%'),
-    sb.from('questions').select('id', {count:'exact', head:true}).not('explanation','is',null).is('explanation_url', null),
+    sb.from('questions').select('id', {count:'exact', head:true}).is('batch_id', null),
   ]);
 
   body.innerHTML = `
@@ -4102,11 +4219,11 @@ async function adminCleanup(){
     <div id="cleanBase64Status" class="muted" style="margin-top:8px; white-space:pre-line;"></div>
   </div>
   <div class="card">
-    <h3>Explanations stored in the database</h3>
-    <p class="muted">Explanation text is usually the single biggest field per question (often 500+ characters each). This moves it to a small file on Cloudflare and clears it from the database row, keeping only a short link — the explanation still shows up exactly the same in the app.</p>
-    <p><b>${explCount||0}</b> question(s) with explanation text still in the database.</p>
-    <button class="primary" id="cleanExpl" ${!explCount?'disabled':''}>Migrate to Cloudflare</button>
-    <div id="cleanExplStatus" class="muted" style="margin-top:8px; white-space:pre-line;"></div>
+    <h3>Question text still stored in the database</h3>
+    <p class="muted">Older uploads kept the question, options and explanation text directly in the database. This bundles all three together (in batches of 50, like a new upload does) and moves them to Cloudflare, clearing the text columns — the question still displays exactly the same in the app.</p>
+    <p><b>${legacyCount||0}</b> question(s) still storing their text in the database.</p>
+    <button class="primary" id="cleanLegacy" ${!legacyCount?'disabled':''}>Migrate to Cloudflare</button>
+    <div id="cleanLegacyStatus" class="muted" style="margin-top:8px; white-space:pre-line;"></div>
   </div>`;
 
   const abBtn = document.getElementById('cleanAbandoned');
@@ -4138,26 +4255,45 @@ async function adminCleanup(){
     st.textContent = `Done — ${done} migrated${failed?`, ${failed} failed (left as-is, safe to try again later)`:''}.`;
   };
 
-  const exBtn = document.getElementById('cleanExpl');
+  const exBtn = document.getElementById('cleanLegacy');
   if(exBtn) exBtn.onclick = async ()=>{
-    if(!confirm(`Migrate ${explCount} explanation(s) to Cloudflare? This can take a while for large numbers — keep this tab open until it finishes.`)) return;
+    if(!confirm(`Migrate ${legacyCount} question(s)' text to Cloudflare? This can take a while for large numbers — keep this tab open until it finishes.`)) return;
     exBtn.disabled = true;
-    const st = document.getElementById('cleanExplStatus');
-    const { data: rows } = await sb.from('questions').select('id, explanation').not('explanation','is',null).is('explanation_url', null).limit(2000);
+    const st = document.getElementById('cleanLegacyStatus');
+    const { data: rows } = await sb.from('questions').select('id, q_text, options, explanation, explanation_url, order_index').is('batch_id', null).limit(2000);
     const all = rows||[];
+    // Rows may still carry an old-format explanation_url from before this
+    // change (fetch its text back out first) or the full text right in the
+    // explanation column — either way, bundle everything into one content
+    // batch per group of 50 rows, keyed by order_index like a fresh upload.
+    let prepDone = 0;
+    const resolved = await mapWithConcurrency(all, 20, async (row)=>{
+      let explanationText = row.explanation || '';
+      if(!explanationText && row.explanation_url){
+        try{
+          const batch = await fetchContentBatch(row.explanation_url);
+          explanationText = (typeof batch[row.order_index] === 'string' ? batch[row.order_index] : batch[row.id]) || '';
+        }catch(e){ explanationText = ''; }
+      }
+      prepDone++;
+      if(prepDone % 100 === 0 || prepDone===all.length) st.textContent = `Preparing… ${prepDone}/${all.length}`;
+      return { row, explanationText };
+    });
     const BATCH = 50;
     const chunks = [];
-    for(let b=0; b<all.length; b+=BATCH) chunks.push(all.slice(b, b+BATCH));
+    for(let b=0; b<resolved.length; b+=BATCH) chunks.push(resolved.slice(b, b+BATCH));
     let done=0, failed=0, chunkDone=0;
     await mapWithConcurrency(chunks, 15, async (chunk)=>{
       const obj = {};
-      chunk.forEach(row=>{ if(row.explanation && row.explanation.trim()) obj[row.id] = row.explanation; });
-      const up = await uploadToCloudflare(new File([JSON.stringify(obj)], 'explanations.json', {type:'application/json'}));
+      chunk.forEach(item=>{ obj[item.row.order_index] = { q: item.row.q_text||'', o: item.row.options||[], e: item.explanationText||'' }; });
+      const up = await uploadToCloudflare(new File([JSON.stringify(obj)], 'content.json', {type:'application/json'}));
       chunkDone++;
       st.textContent = `Migrating… batch ${chunkDone}/${chunks.length}`;
       if(up.error){ failed += chunk.length; return; }
-      const ids = chunk.map(r=>r.id);
-      const { error } = await sb.from('questions').update({explanation_url: up.url, explanation: null}).in('id', ids);
+      const { data: cb, error: cbErr } = await sb.from('content_batches').insert({url: up.url}).select().maybeSingle();
+      if(cbErr){ failed += chunk.length; return; }
+      const ids = chunk.map(item=>item.row.id);
+      const { error } = await sb.from('questions').update({batch_id: cb.id, q_text: null, options: null, explanation: null, explanation_url: null}).in('id', ids);
       if(error) failed += chunk.length; else done += chunk.length;
     });
     st.textContent = `Done — ${done} migrated${failed?`, ${failed} failed (left as-is, safe to try again later)`:''}.`;
@@ -4393,7 +4529,8 @@ async function renderSetEditor(){
   const { data: set } = await sb.from('sets').select('*').eq('id', S.esSet).maybeSingle();
   if(!set){ wrap.innerHTML=''; return; }
   const qIds = set.question_ids||[];
-  const { data: qs } = qIds.length ? await sb.from('questions').select('id, q_text, subject').in('id', qIds) : { data: [] };
+  const { data: qsRaw } = qIds.length ? await sb.from('questions').select('id, q_text, subject, image_url, batch_id, content_batches(url), order_index').in('id', qIds) : { data: [] };
+  const qs = await hydrateQuestionsContent(qsRaw);
   const qMap = {}; (qs||[]).forEach(q=> qMap[q.id]=q);
   const orderedQs = qIds.map(id=>qMap[id]).filter(Boolean);
   wrap.innerHTML = `
@@ -4404,9 +4541,17 @@ async function renderSetEditor(){
       </div>`).join('') || '<p class="muted" style="padding:8px;">No questions in this set.</p>'}
     </div>
     <div style="margin-top:12px;">
-      <label>Add a question (search this section's question bank)</label>
-      <input id="esSearch" placeholder="Type part of the question text…">
-      <div id="esSearchResults" class="muted" style="margin-top:6px;max-height:200px;overflow-y:auto;"></div>
+      <label>Add random questions from this section</label>
+      <div class="row" style="gap:8px;flex-wrap:wrap;">
+        <input id="esRandCount" type="number" min="1" value="10" style="max-width:90px;">
+        <select id="esRandType" style="max-width:200px;">
+          <option value="any">Any</option>
+          <option value="image">Image-based only</option>
+          <option value="text">Text-only (no image)</option>
+        </select>
+        <button class="subtle" id="esRandAdd">+ Add</button>
+      </div>
+      <div id="esRandStatus" class="muted" style="margin-top:6px;"></div>
     </div>
     <div class="row" style="margin-top:14px;justify-content:space-between;">
       <span class="muted" id="esCount">${orderedQs.length} question(s)</span>
@@ -4422,27 +4567,17 @@ async function renderSetEditor(){
     b.closest('div.row').remove();
     document.getElementById('esCount').textContent = `${workingIds.length} question(s)`;
   });
-  let searchTimer=null;
-  document.getElementById('esSearch').oninput = (e)=>{
-    clearTimeout(searchTimer);
-    const term = e.target.value.trim();
-    searchTimer = setTimeout(async ()=>{
-      const resWrap = document.getElementById('esSearchResults');
-      if(term.length<3){ resWrap.innerHTML = '<p class="muted">Type at least 3 characters…</p>'; return; }
-      resWrap.innerHTML = 'Searching…';
-      const { data: found } = await sb.from('questions').select('id, q_text').eq('folder_id', S.esFolder).ilike('q_text', `%${term}%`).limit(15);
-      const filtered = (found||[]).filter(q=>!workingIds.includes(q.id));
-      if(!filtered.length){ resWrap.innerHTML = '<p class="muted">No matches (or already in this set).</p>'; return; }
-      resWrap.innerHTML = filtered.map(q=>`<div class="row" style="justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border-soft);">
-        <span style="font-size:13.5px;">${escapeHtml((q.q_text||'').replace(/<[^>]+>/g,'').slice(0,80))}…</span>
-        <button class="subtle esAdd" data-id="${q.id}" style="min-height:auto;padding:6px 12px;">+ Add</button>
-      </div>`).join('');
-      resWrap.querySelectorAll('.esAdd').forEach(b=> b.onclick = ()=>{
-        workingIds.push(b.dataset.id);
-        document.getElementById('esCount').textContent = `${workingIds.length} question(s)`;
-        b.textContent = 'Added ✓'; b.disabled = true;
-      });
-    }, 350);
+  document.getElementById('esRandAdd').onclick = async ()=>{
+    const st = document.getElementById('esRandStatus');
+    const n = Math.max(1, +document.getElementById('esRandCount').value || 1);
+    const want = document.getElementById('esRandType').value;
+    st.textContent = 'Picking…';
+    const { data, error } = await sb.rpc('random_questions', { p_folder_id: S.esFolder, p_want: want, p_exclude_ids: workingIds, p_limit: n });
+    if(error){ st.textContent = 'Failed: '+error.message; return; }
+    const newIds = (data||[]).map(r=>r.id);
+    workingIds = workingIds.concat(newIds);
+    document.getElementById('esCount').textContent = `${workingIds.length} question(s)`;
+    st.textContent = newIds.length ? `Added ${newIds.length} question(s) — click "Save changes" to keep them.` : 'No matching questions found (or all already in this set).';
   };
   document.getElementById('esSave').onclick = async ()=>{
     const st = document.getElementById('esSaveStatus');
@@ -4897,14 +5032,15 @@ async function renderUserModalBody(uid, overlay){
     const vBtn = tr.querySelector('.umVerify');
     if(vBtn) vBtn.onclick = async ()=>{
       vBtn.disabled = true;
-      let expiry = null;
+      let expiry = null, planDeviceLimit = null;
       if(planId){
-        const { data: plan } = await sb.from('plans').select('duration_days').eq('id', planId).maybeSingle();
-        if(plan) expiry = new Date(Date.now() + plan.duration_days*24*60*60*1000).toISOString();
+        const { data: plan } = await sb.from('plans').select('duration_days, device_limit').eq('id', planId).maybeSingle();
+        if(plan){ expiry = new Date(Date.now() + plan.duration_days*24*60*60*1000).toISOString(); planDeviceLimit = plan.device_limit; }
       }
       const { error: pErr } = await sb.from('payments').update({status:'verified'}).eq('id', pid);
       const updateFields = {status:'active'};
       if(expiry) updateFields.subscription_expiry = expiry;
+      if(planDeviceLimit) updateFields.device_limit = planDeviceLimit;
       if(u.promoter_milestone_available) updateFields.promoter_milestone_available = false;
       const { error: uErr } = await sb.from('profiles').update(updateFields).eq('id', uid);
       if(pErr || uErr){ toast('Failed — '+(pErr?.message||uErr?.message)); vBtn.disabled=false; return; }
@@ -4924,22 +5060,24 @@ async function adminPlans(){
   const body=document.getElementById('atabBody');
   const { data: plans } = await sb.from('plans').select('*').order('display_order');
   body.innerHTML = `<div class="card"><h3>Subscription plans</h3>
-  <table>${(plans||[]).map(p=>`<tr><td>${p.name}</td><td>₹${p.price}</td><td>${p.duration_days} days</td><td><button class="danger delBtn" data-id="${p.id}" style="padding:5px 9px;font-size:11px;">Delete</button></td></tr>`).join('')}</table>
+  <table>${(plans||[]).map(p=>`<tr><td>${p.name}</td><td>₹${p.price}</td><td>${p.duration_days} days</td><td>${p.device_limit||1} device${(p.device_limit||1)>1?'s':''}</td><td><button class="danger delBtn" data-id="${p.id}" style="padding:5px 9px;font-size:11px;">Delete</button></td></tr>`).join('')}</table>
   <div class="divider"></div>
-  <label>Plan name</label><input id="pName" placeholder="e.g. Monthly">
+  <label>Plan name</label><input id="pName" placeholder="e.g. Monthly — 2 devices">
   <label>Price (₹)</label><input id="pPrice" type="number">
   <label>Duration (days)</label><input id="pDays" type="number">
+  <label>Devices allowed on this plan</label><input id="pDevices" type="number" min="1" value="1">
   <button class="primary" id="pAdd" style="margin-top:12px;">Add plan</button>
   </div>`;
   document.getElementById('pAdd').onclick=async ()=>{
     const name=document.getElementById('pName').value.trim();
     const price=+document.getElementById('pPrice').value;
     const days=+document.getElementById('pDays').value;
+    const devices=+document.getElementById('pDevices').value || 1;
     if(!name||!price||!days){ toast('Fill all plan fields'); return; }
     // Firestore's orderBy(field) only returns docs that actually HAVE that
     // field — a plan inserted without display_order would silently vanish
     // from every listing that orders by it (looked like "add" did nothing).
-    const { error } = await sb.from('plans').insert({name, price, duration_days:days, display_order:(plans||[]).length});
+    const { error } = await sb.from('plans').insert({name, price, duration_days:days, device_limit:devices, display_order:(plans||[]).length});
     if(error){ toast('Could not add plan: '+error.message); return; }
     adminPlans();
   };
@@ -5079,10 +5217,11 @@ async function adminQueries(){
   }
   const qIds = [...new Set(queries.map(q=>q.question_id))];
   const uIds = [...new Set(queries.map(q=>q.user_id))];
-  const [{ data: questions }, { data: users }] = await Promise.all([
-    sb.from('questions').select('id, q_text, options, correct_index, subject, is_controversial').in('id', qIds),
+  const [{ data: questionsRaw }, { data: users }] = await Promise.all([
+    sb.from('questions').select('id, correct_index, image_url, batch_id, content_batches(url), order_index, subject, is_controversial').in('id', qIds),
     sb.from('profiles').select('id, name, email').in('id', uIds),
   ]);
+  const questions = await hydrateQuestionsContent(questionsRaw);
   const qById = {}; (questions||[]).forEach(q=> qById[q.id]=q);
   const uById = {}; (users||[]).forEach(u=> uById[u.id]=u);
 
