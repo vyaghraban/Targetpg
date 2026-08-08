@@ -2922,7 +2922,7 @@ function renderExam(){
   }
   if(att.answers[q.id].status==='not_visited') att.answers[q.id].status='not_answered';
   ensureQuestionImage(q, ()=>{ if(S.exam && S.exam.questions[S.exam.idx] === q) renderExam(); });
-  app.innerHTML = `<div class="topbar"><div class="row" style="gap:10px;align-items:center;"><button class="ghost" id="exitExamBtn" style="padding:8px 12px;font-size:12px;min-height:auto;">← Back</button><div class="brand"><span class="dot"></span>Set ${set.set_number||''} ${set.category?('· '+set.category.replace('_',' ')):''}${set.session_id?' · shared timer':''}</div></div><div class="row" style="gap:10px;align-items:center;"><button class="ghost" id="pauseExamBtn" style="padding:8px 12px;font-size:12px;min-height:auto;">⏸ Pause</button>${timerHtml}</div></div>
+  app.innerHTML = `<div class="topbar"><div class="row" style="gap:10px;align-items:center;"><button class="ghost" id="exitExamBtn" style="padding:8px 12px;font-size:12px;min-height:auto;">← Back</button><div class="brand"><span class="dot"></span>Set ${set.set_number||''} ${set.category?('· '+set.category.replace('_',' ')):''}${set.session_id?' · shared timer':''}</div></div><div class="row" style="gap:10px;align-items:center;"><button class="primary" id="pauseExamBtn" style="padding:13px 22px;font-size:15px;font-weight:700;">⏸ Pause</button>${timerHtml}</div></div>
   <div class="exam-shell">
     <div class="exam-main">
       <div class="qmeta">Question ${idx+1} of ${questions.length}</div>
