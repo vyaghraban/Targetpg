@@ -498,24 +498,13 @@ function naturalCompare(a, b){
   }
   return 0;
 }
-// Folders (or subject-groups within one) at or under this size become a
-// single set holding every question — matches how platforms export their
-// own pre-made tests (e.g. a 400-question Grand Test) so it isn't sliced
-// up. Anything bigger (e.g. a 1,995-question "ENT" subject dump — clearly
-// not meant for one sitting) falls back to fixed-size chunks instead.
-const ONE_SET_MAX_QUESTIONS = 400;
 const EXAM_CONFIG = {
-  subjectwise:  {label:'Subject-wise (one set up to 400q, else 50 q/set)', perSet:50, minutesPerFull:45, sequential:false, singleSetPreferred:true},
-  inicet:       {label:'INICET pattern (one set up to 400q, else 50 q/set)', perSet:50, minutesPerFull:45, sequential:true, singleSetPreferred:true},
+  subjectwise:  {label:'Subject-wise', perSet:50, minutesPerFull:45, sequential:false},
+  inicet:       {label:'INICET pattern',        perSet:50, minutesPerFull:45, sequential:true},
   neetpg:       {label:'NEET PG pattern',       perSet:40, minutesPerFull:42, sequential:true},
   updated_neetpg:{label:'Updated NEET PG pattern', perSet:36, minutesPerFull:42, sequential:true},
-  auto_subsection:{label:'Auto — one set up to 400q, else 50 q/set', perSet:50, minutesPerFull:45, sequential:true, singleSetPreferred:true},
+  auto_subsection:{label:'Auto (non-subject file) — 50 q / 45 min subsections', perSet:50, minutesPerFull:45, sequential:true},
 };
-// Decides the actual chunk size for one folder/subject-group: null means
-// "one set, don't split" (chunkToSets scales its duration to 0.9 min/q).
-function effectivePerSet(count, cfg){
-  return (cfg.singleSetPreferred && count <= ONE_SET_MAX_QUESTIONS) ? null : cfg.perSet;
-}
 
 // The 19 NEET PG subjects, each with common short/long-form aliases used by
 // providers like BTR/Prepladder. A file/folder name is matched against these
@@ -2713,7 +2702,25 @@ async function loadFeedbackTab(){
     loadFeedbackTab();
   };
 }
-async function startAttempt(setId, presetSet){
+// For a session (shared-timer group of sets): total time is the sum of
+// every set's duration in the group, and elapsed time runs from the very
+// first set's start — paused time from ANY set already done in this
+// session still counts (summed across every attempt row in the group) so
+// pausing mid-way through set 2 doesn't get "forgotten" once set 3 opens.
+async function getSessionTiming(att, set){
+  const { data: siblingSets } = await sb.from('sets').select('id, duration_minutes').eq('session_id', set.session_id);
+  const totalSec = Math.round((siblingSets||[]).reduce((s,x)=>s+Number(x.duration_minutes),0)*60);
+  const setIds = (siblingSets||[]).map(s=>s.id);
+  const { data: siblingAttempts } = await sb.from('attempts').select('paused_seconds, pause_started_at').eq('user_id', att.user_id).in('set_id', setIds);
+  let totalPaused = 0;
+  (siblingAttempts||[]).forEach(a=>{
+    totalPaused += (a.paused_seconds||0) + (a.pause_started_at ? Math.floor((Date.now()-new Date(a.pause_started_at).getTime())/1000) : 0);
+  });
+  const sessionStartedAt = att.session_started_at || att.started_at;
+  const elapsedSec = Math.floor((Date.now()-new Date(sessionStartedAt).getTime())/1000) - totalPaused;
+  return { elapsedSec, totalSec };
+}
+async function startAttempt(setId, presetSet, forcedSessionStart){
   const set = presetSet || (await sb.from('sets').select('*').eq('id', setId).maybeSingle()).data;
   let { data: att } = await sb.from('attempts').select('*').eq('user_id', S.profile.id).eq('set_id', setId).eq('status','in_progress').maybeSingle();
   // Deliberately excludes image_url: some questions now carry embedded
@@ -2727,12 +2734,33 @@ async function startAttempt(setId, presetSet){
   const ordered = set.question_ids.map(id=>questions.find(q=>q.id===id)).filter(Boolean);
   if(!att){
     const initAnswers={}; ordered.forEach(q=>initAnswers[q.id]={selected:null,status:'not_visited'});
-    const ins = await sb.from('attempts').insert({user_id:S.profile.id, set_id:setId, answers:initAnswers}).select().maybeSingle();
+    const payload = {user_id:S.profile.id, set_id:setId, answers:initAnswers};
+    if(set.session_id){
+      let sessionStart = forcedSessionStart;
+      if(!sessionStart){
+        // Opened directly (not via auto-advance from a previous set) — if
+        // the session is already underway (another set in it has an
+        // attempt), reuse THAT session's original start instead of
+        // resetting the shared clock.
+        const { data: sib } = await sb.from('sets').select('id').eq('session_id', set.session_id);
+        const sibIds = (sib||[]).map(s=>s.id);
+        const { data: sibAtt } = await sb.from('attempts').select('session_started_at, started_at').eq('user_id', S.profile.id).in('set_id', sibIds).order('started_at',{ascending:true}).limit(1).maybeSingle();
+        sessionStart = sibAtt ? (sibAtt.session_started_at || sibAtt.started_at) : new Date().toISOString();
+      }
+      payload.session_started_at = sessionStart;
+    }
+    const ins = await sb.from('attempts').insert(payload).select().maybeSingle();
     att = ins.data;
   }
-  const pausedSoFar = (att.paused_seconds||0) + (att.pause_started_at ? Math.floor((Date.now()-new Date(att.pause_started_at).getTime())/1000) : 0);
-  const elapsedSec = Math.floor((Date.now()-new Date(att.started_at).getTime())/1000) - pausedSoFar;
-  const totalSec = Math.round(set.duration_minutes*60);
+  let elapsedSec, totalSec;
+  if(set.session_id){
+    const timing = await getSessionTiming(att, set);
+    elapsedSec = timing.elapsedSec; totalSec = timing.totalSec;
+  } else {
+    const pausedSoFar = (att.paused_seconds||0) + (att.pause_started_at ? Math.floor((Date.now()-new Date(att.pause_started_at).getTime())/1000) : 0);
+    elapsedSec = Math.floor((Date.now()-new Date(att.started_at).getTime())/1000) - pausedSoFar;
+    totalSec = Math.round(set.duration_minutes*60);
+  }
   if(elapsedSec >= totalSec){ await submitAttempt(att, set, ordered, true); return; }
   goTo({ exam:{ set, att, questions:ordered, idx:0, totalSec, elapsedAtLoad:elapsedSec, paused: !!att.pause_started_at }, view:'exam' });
   if(!att.pause_started_at) startTimer();
@@ -2834,7 +2862,7 @@ function renderExam(){
   const q = questions[idx];
   const timerHtml = `<span class="timer-ring" id="examTimerRing" style="--pct:${Math.max(0,Math.min(100,(S.exam.totalSec-S.exam.elapsedAtLoad)/S.exam.totalSec*100))}"><span class="timer" id="examTimer">${fmtTime(S.exam.totalSec-S.exam.elapsedAtLoad)}</span></span>`;
   if(S.exam.paused){
-    app.innerHTML = `<div class="topbar"><div class="row" style="gap:10px;align-items:center;"><button class="ghost" id="exitExamBtn" style="padding:8px 12px;font-size:12px;min-height:auto;">← Back</button><div class="brand"><span class="dot"></span>Set ${set.set_number||''} ${set.category?('· '+set.category.replace('_',' ')):''}</div></div>${timerHtml}</div>
+    app.innerHTML = `<div class="topbar"><div class="row" style="gap:10px;align-items:center;"><button class="ghost" id="exitExamBtn" style="padding:8px 12px;font-size:12px;min-height:auto;">← Back</button><div class="brand"><span class="dot"></span>Set ${set.set_number||''} ${set.category?('· '+set.category.replace('_',' ')):''}${set.session_id?' · shared timer':''}</div></div>${timerHtml}</div>
     <div class="container">
       <div class="card" style="text-align:center;padding:44px 20px;">
         <div style="font-size:40px;margin-bottom:10px;">⏸️</div>
@@ -2849,7 +2877,7 @@ function renderExam(){
   }
   if(att.answers[q.id].status==='not_visited') att.answers[q.id].status='not_answered';
   ensureQuestionImage(q, ()=>{ if(S.exam && S.exam.questions[S.exam.idx] === q) renderExam(); });
-  app.innerHTML = `<div class="topbar"><div class="row" style="gap:10px;align-items:center;"><button class="ghost" id="exitExamBtn" style="padding:8px 12px;font-size:12px;min-height:auto;">← Back</button><div class="brand"><span class="dot"></span>Set ${set.set_number||''} ${set.category?('· '+set.category.replace('_',' ')):''}</div></div><div class="row" style="gap:10px;align-items:center;"><button class="ghost" id="pauseExamBtn" style="padding:8px 12px;font-size:12px;min-height:auto;">⏸ Pause</button>${timerHtml}</div></div>
+  app.innerHTML = `<div class="topbar"><div class="row" style="gap:10px;align-items:center;"><button class="ghost" id="exitExamBtn" style="padding:8px 12px;font-size:12px;min-height:auto;">← Back</button><div class="brand"><span class="dot"></span>Set ${set.set_number||''} ${set.category?('· '+set.category.replace('_',' ')):''}${set.session_id?' · shared timer':''}</div></div><div class="row" style="gap:10px;align-items:center;"><button class="ghost" id="pauseExamBtn" style="padding:8px 12px;font-size:12px;min-height:auto;">⏸ Pause</button>${timerHtml}</div></div>
   <div class="exam-shell">
     <div class="exam-main">
       <div class="qmeta">Question ${idx+1} of ${questions.length}</div>
@@ -2917,6 +2945,33 @@ function saveAttemptSoft(){
     await sb.from('attempts').update({answers:S.exam.att.answers}).eq('id', S.exam.att.id);
   }, 400);
 }
+// Once the LAST set of a session is submitted, this merges every set's
+// attempt in that session into one combined report card + review — total
+// score/correct/questions summed, and every question from every set in
+// one review list. The rank badge is skipped for this (there's no single
+// "set" to compare against — set_rank_stats works per real set only).
+async function buildSessionCombinedReview(sessionId){
+  const { data: sessSets } = await sb.from('sets').select('*').eq('session_id', sessionId).order('set_number',{ascending:true});
+  const setIds = (sessSets||[]).map(s=>s.id);
+  const { data: sessAttempts } = await sb.from('attempts').select('*').eq('user_id', S.profile.id).in('set_id', setIds).eq('status','submitted');
+  const attemptsBySet = {}; (sessAttempts||[]).forEach(a=>{ attemptsBySet[a.set_id]=a; });
+  let allQuestionIds = [], combinedAnswers = {}, totalScore=0, totalCorrect=0, totalQ=0;
+  (sessSets||[]).forEach(s=>{
+    allQuestionIds = allQuestionIds.concat(s.question_ids);
+    const a = attemptsBySet[s.id];
+    if(a){
+      Object.assign(combinedAnswers, a.answers||{});
+      totalScore += a.score||0; totalCorrect += a.correct_count||0; totalQ += a.total_questions||0;
+    }
+  });
+  const { data: qRows } = await sb.from('questions').select('id, q_text, options, correct_index, explanation_url, order_index, subject, is_controversial').in('id', allQuestionIds);
+  const orderedQuestions = allQuestionIds.map(id=>(qRows||[]).find(q=>q.id===id)).filter(Boolean);
+  return {
+    att: { id:'session-'+sessionId, answers: combinedAnswers, status:'submitted', score: totalScore, correct_count: totalCorrect, total_questions: totalQ },
+    set: { id: null, session_id: sessionId, question_ids: allQuestionIds, sessionSetIds: setIds },
+    questions: orderedQuestions,
+  };
+}
 async function submitAttempt(att, set, questions, auto){
   clearInterval(timerHandle);
   const { data: qs } = await sb.from('questions').select('id, correct_index').in('id', set.question_ids);
@@ -2933,6 +2988,26 @@ async function submitAttempt(att, set, questions, auto){
   await sb.from('attempts').update({answers:att.answers, status:'submitted', submitted_at:new Date().toISOString(), score, correct_count:correctCount, total_questions:qs.length}).eq('id', att.id);
   bumpQuestionStats(statPairs).catch(e=>console.error('question stats update failed', e));
   att.status='submitted'; att.score=score;
+
+  if(set.session_id){
+    const { data: nextSet } = await sb.from('sets').select('*').eq('session_id', set.session_id).gt('set_number', set.set_number).order('set_number',{ascending:true}).limit(1).maybeSingle();
+    if(nextSet){
+      const timing = await getSessionTiming(att, set);
+      if(timing.elapsedSec < timing.totalSec){
+        S.exam = null;
+        await startAttempt(nextSet.id, nextSet, att.session_started_at || att.started_at);
+        return;
+      }
+    }
+    // Last set of the session (or session time ran out) — show one
+    // combined result across every set in the group, not just this one.
+    const combined = await buildSessionCombinedReview(set.session_id);
+    S.exam = null;
+    S.review = { ...combined, showExpl:false };
+    showCompletionAnim(auto ? 'Time up — session auto-submitted' : 'Session completed! 🎉', renderReviewChoice);
+    return;
+  }
+
   S.exam = null;
   S.review = { att, set, questions, showExpl:false };
   showCompletionAnim(auto ? 'Time up — set auto-submitted' : 'Set completed! 🎉', renderReviewChoice);
@@ -2941,13 +3016,32 @@ async function renderReviewChoice(){
   const { att, set, questions } = S.review;
   const totalQ = att.total_questions ?? questions.length;
   const pct = totalQ ? Math.round((att.correct_count||0)/totalQ*1000)/10 : 0;
-  let rankRow = null;
+  let rankSectionHtml = '';
   if(set && set.id){
     const { data: rankStats } = await sb.rpc('set_rank_stats', { p_set_id: set.id, p_user_id: S.profile.id });
-    rankRow = Array.isArray(rankStats) ? rankStats[0] : rankStats;
+    const rankRow = Array.isArray(rankStats) ? rankStats[0] : rankStats;
+    rankSectionHtml = rankBadgeHtml(rankRow);
+  } else if(set && set.session_id && set.sessionSetIds?.length){
+    const [combinedRes, perSetRes] = await Promise.all([
+      sb.rpc('session_rank_stats', { p_set_ids: set.sessionSetIds, p_user_id: S.profile.id }),
+      Promise.all(set.sessionSetIds.map(sid=>sb.rpc('set_rank_stats', { p_set_id: sid, p_user_id: S.profile.id }))),
+    ]);
+    const combinedRow = Array.isArray(combinedRes.data) ? combinedRes.data[0] : combinedRes.data;
+    rankSectionHtml = `
+      <div class="muted" style="margin:18px 0 6px;font-size:12.5px;">Combined rank — all sets in this session added together</div>
+      ${rankBadgeHtml(combinedRow)}
+      <div class="muted" style="margin:16px 0 6px;font-size:12.5px;">Rank per individual set</div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        ${perSetRes.map((r,idx)=>{
+          const row = Array.isArray(r.data) ? r.data[0] : r.data;
+          return `<div class="row" style="justify-content:space-between;align-items:center;background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:10px;padding:9px 13px;">
+            <span style="font-size:13px;font-weight:700;">Set ${idx+1}</span>
+            <span class="muted" style="font-size:12.5px;">${row && row.rank ? `#${row.rank} of ${row.total_attempts} · ${row.percentile}th percentile` : 'Not enough attempts yet'}</span>
+          </div>`;
+        }).join('')}
+      </div>`;
   }
-  const qIds = questions.map(q=>q.id);
-  const { data: accStats } = await sb.rpc('question_accuracy_stats', { p_question_ids: qIds });
+  const { data: accStats } = await sb.rpc('question_accuracy_stats', { p_question_ids: questions.map(q=>q.id) });
   let hard=0, med=0, easy=0;
   (accStats||[]).forEach(s=>{
     if(!s.total_attempts) return;
@@ -2966,7 +3060,7 @@ async function renderReviewChoice(){
           <div class="muted" style="margin-top:2px;">Score: ${att.score>0?'+':''}${att.score}</div>
         </div>
       </div>
-      ${rankBadgeHtml(rankRow)}
+      ${rankSectionHtml}
       <div style="margin-top:24px;">
         <div class="muted" style="margin-bottom:4px;">Question difficulty — based on how everyone has done on these so far</div>
         <div class="diffbars">
@@ -3837,6 +3931,29 @@ async function renderFolderList(){
   }
   renderChecklist(groups.length===1 ? groups[0] : '__all__');
 }
+// Groups a freshly-chunked run of 50-question sets into shared-timer
+// "sessions" based on how many sets came out of it:
+//   ≤4 sets (≤200q total)  -> all of them share ONE session (one combined
+//                             timer, submitting a set auto-opens the next)
+//   5-8 sets (201-400q)    -> split into two independent sessions, "Part A"
+//                             (first half) and "Part B" (second half) —
+//                             each with its own shared timer; a user can
+//                             finish Part A now and Part B whenever later
+//   >8 sets (>400q)        -> no session — back to fully independent,
+//                             per-set timers (too big to time as one block)
+function applySessionGrouping(setsArr){
+  const n = setsArr.length;
+  if(n <= 1) return setsArr;
+  if(n <= 4){
+    const sid = crypto.randomUUID();
+    setsArr.forEach(s=>{ s.session_id = sid; });
+  } else if(n <= 8){
+    const half = Math.ceil(n/2);
+    const sidA = crypto.randomUUID(), sidB = crypto.randomUUID();
+    setsArr.forEach((s,idx)=>{ s.session_id = idx<half ? sidA : sidB; });
+  }
+  return setsArr;
+}
 function chunkToSets(ids, perSet, fullMinutes, subject){
   // perSet:null means "topic-wise" — never split, one set holds every
   // question in the folder, duration is always 0.9 min/question.
@@ -3870,11 +3987,10 @@ async function generateSetsForFolder(folder){
     const bySubject={};
     (qs||[]).forEach(q=>{ (bySubject[q.subject||folder.name]=bySubject[q.subject||folder.name]||[]).push(q.id); });
     for(const subj in bySubject){
-      setsToInsert = setsToInsert.concat(chunkToSets(bySubject[subj], effectivePerSet(bySubject[subj].length, cfg), cfg.minutesPerFull, subj));
+      setsToInsert = setsToInsert.concat(applySessionGrouping(chunkToSets(bySubject[subj], cfg.perSet, cfg.minutesPerFull, subj)));
     }
   } else {
-    const ids = (qs||[]).map(q=>q.id);
-    setsToInsert = chunkToSets(ids, effectivePerSet(ids.length, cfg), cfg.minutesPerFull, null);
+    setsToInsert = applySessionGrouping(chunkToSets((qs||[]).map(q=>q.id), cfg.perSet, cfg.minutesPerFull, null));
   }
   if(setsToInsert.length){
     await sb.from('sets').insert(setsToInsert.map(s=>({...s, qbank_id:folder.qbank_id, folder_id:folder.id})));
