@@ -2137,7 +2137,7 @@ async function startCategoryDeck(folderId, category){
 // and their own mistake-category tags), and share it with a short code that
 // only other active users can redeem. See generateSetsForFolder's chunking
 // for where the "leftover chunk gets 0.9 min/question" rule is mirrored here.
-let ctState = { platform: '__all__', folders: [], sections: [], difficulty: 'all', category: 'all', numQuestions: 50, duration: 45 };
+let ctState = { platform: '__all__', folder: '__all__', subfolder: '__all__', section: '__all__', difficulty: 'all', category: 'all', numQuestions: 50, duration: 45 };
 let ctFoldersCache = null; // { forPlatform, list } — avoids refetching folders on every chip toggle
 async function getCtFolders(qbankId){
   if(ctFoldersCache && ctFoldersCache.forPlatform===qbankId) return ctFoldersCache.list;
@@ -2191,24 +2191,32 @@ async function renderBuildCard(qbanks){
 
   const groupNames = [...new Set(folders.map(f=>folderGroupOf(f.name)))].sort((a,b)=>a.localeCompare(b));
   // Prune stale selections left over from a previous platform/folder pick.
-  ctState.folders = ctState.folders.filter(g=>groupNames.includes(g));
-  const sectionCandidates = ctState.folders.length ? folders.filter(f=>ctState.folders.includes(folderGroupOf(f.name))) : folders;
-  ctState.sections = ctState.sections.filter(id=>sectionCandidates.some(f=>f.id===id));
+  if(ctState.folder!=='__all__' && !groupNames.includes(ctState.folder)){ ctState.folder='__all__'; ctState.subfolder='__all__'; ctState.section='__all__'; }
+  const folderFiltered = ctState.folder==='__all__' ? folders : folders.filter(f=>folderGroupOf(f.name)===ctState.folder);
+  const subGroupNames = [...new Set(folderFiltered.map(f=>subGroupOf(f.name)).filter(s=>s && s!==ctState.folder))].sort((a,b)=>a.localeCompare(b));
+  if(ctState.subfolder!=='__all__' && !subGroupNames.includes(ctState.subfolder)){ ctState.subfolder='__all__'; ctState.section='__all__'; }
+  const subFiltered = ctState.subfolder==='__all__' ? folderFiltered : folderFiltered.filter(f=>subGroupOf(f.name)===ctState.subfolder);
+  if(ctState.section!=='__all__' && !subFiltered.some(f=>f.id===ctState.section)){ ctState.section='__all__'; }
+  const sectionCandidates = subFiltered;
 
   const opts = ctOptionSets(qbanks);
+  const folderOpts = [{value:'__all__',label:'🌐 All folders'}, ...groupNames.map(g=>({value:g,label:g}))];
+  const subfolderOpts = [{value:'__all__',label:'🌐 All subfolders'}, ...subGroupNames.map(g=>({value:g,label:g}))];
+  const sectionOpts = [{value:'__all__',label:'🌐 All sections'}, ...sectionCandidates.map(f=>({value:f.id,label:leafNameOf(f.name)}))];
   card.innerHTML = `
     <h3>🧩 Build your own set</h3>
-    <p class="muted">Pick a platform, narrow down by folder/section if you want (leave unpicked for everything), then choose how many questions and how long. Every regenerate gives you fresh questions — never a repeat of a set you already made this way.</p>
+    <p class="muted">Pick a platform, narrow down by folder/subfolder/section if you want (leave on "All" for everything), then choose how many questions and how long. Every regenerate gives you fresh questions — never a repeat of a set you already made this way.</p>
     <label>Platform</label>
     ${renderCselHtml('ctPlatformSel', opts.platform, ctState.platform)}
 
-    <label style="margin-top:14px;">Folders${ctState.folders.length?` <span class="muted" style="font-weight:400;">(${ctState.folders.length} picked)</span>`:''}</label>
-    <p class="muted" style="font-size:12px;margin:-4px 0 8px;">Tap to select — leave all unpicked to include every folder. Multiple allowed.</p>
-    ${renderChipMultiSelect('ctFolderChips', groupNames.map(g=>({value:g,label:g})), ctState.folders)}
+    <label style="margin-top:14px;">Folder</label>
+    ${renderCselHtml('ctFolderSel', folderOpts, ctState.folder)}
 
-    <label style="margin-top:16px;">Sections${ctState.sections.length?` <span class="muted" style="font-weight:400;">(${ctState.sections.length} picked)</span>`:''}</label>
-    <p class="muted" style="font-size:12px;margin:-4px 0 8px;">Narrow further to specific sections inside the folders above. Multiple allowed.</p>
-    ${renderChipMultiSelect('ctSectionChips', sectionCandidates.map(f=>({value:f.id,label:leafNameOf(f.name)})), ctState.sections)}
+    <label style="margin-top:14px;">Subfolder</label>
+    ${renderCselHtml('ctSubfolderSel', subfolderOpts, ctState.subfolder)}
+
+    <label style="margin-top:14px;">Section</label>
+    ${renderCselHtml('ctSectionSel', sectionOpts, ctState.section)}
 
     <label style="margin-top:16px;">Difficulty (based on how everyone else has scored on it)</label>
     ${renderCselHtml('ctDifficultySel', opts.difficulty, ctState.difficulty)}
@@ -2223,9 +2231,10 @@ async function renderBuildCard(qbanks){
     <button class="primary" id="ctBuild" style="margin-top:18px;">✨ Create my set</button>
     <div id="ctStatus" class="muted" style="margin-top:10px; white-space:pre-line;"></div>
     <div id="ctResult" style="margin-top:12px;"></div>`;
-  wireCsel('ctPlatformSel', opts.platform, ctState.platform, v=>{ ctState.platform=v; ctState.folders=[]; ctState.sections=[]; renderBuildCard(qbanks); });
-  wireChipMultiSelect('ctFolderChips', ctState.folders, ()=>renderBuildCard(qbanks));
-  wireChipMultiSelect('ctSectionChips', ctState.sections, ()=>renderBuildCard(qbanks));
+  wireCsel('ctPlatformSel', opts.platform, ctState.platform, v=>{ ctState.platform=v; ctState.folder='__all__'; ctState.subfolder='__all__'; ctState.section='__all__'; renderBuildCard(qbanks); });
+  wireCsel('ctFolderSel', folderOpts, ctState.folder, v=>{ ctState.folder=v; ctState.subfolder='__all__'; ctState.section='__all__'; renderBuildCard(qbanks); });
+  wireCsel('ctSubfolderSel', subfolderOpts, ctState.subfolder, v=>{ ctState.subfolder=v; ctState.section='__all__'; renderBuildCard(qbanks); });
+  wireCsel('ctSectionSel', sectionOpts, ctState.section, v=>{ ctState.section=v; renderBuildCard(qbanks); });
   wireCsel('ctDifficultySel', opts.difficulty, ctState.difficulty, v=>{ ctState.difficulty=v; renderBuildCard(qbanks); });
   wireCsel('ctCategorySel', opts.category, ctState.category, v=>{ ctState.category=v; renderBuildCard(qbanks); });
   document.getElementById('ctNumQ').onchange = (e)=>{ ctState.numQuestions = Math.max(1, parseInt(e.target.value)||50); };
@@ -2344,8 +2353,9 @@ async function buildCustomSet(qbanks){
   if(!folders || !folders.length){ st.textContent = 'No sections in this platform yet.'; return; }
 
   let targetFolders = folders;
-  if(ctState.folders.length) targetFolders = targetFolders.filter(f=> ctState.folders.includes(folderGroupOf(f.name)));
-  if(ctState.sections.length) targetFolders = targetFolders.filter(f=> ctState.sections.includes(f.id));
+  if(ctState.folder!=='__all__') targetFolders = targetFolders.filter(f=> folderGroupOf(f.name)===ctState.folder);
+  if(ctState.subfolder!=='__all__') targetFolders = targetFolders.filter(f=> subGroupOf(f.name)===ctState.subfolder);
+  if(ctState.section!=='__all__') targetFolders = targetFolders.filter(f=> f.id===ctState.section);
   if(!targetFolders.length){ alert('No questions available for this combination.'); st.textContent=''; return; }
 
   const qRows = await fetchAllRows(()=>sb.from('questions').select('id').in('folder_id', targetFolders.map(f=>f.id)));
@@ -2369,7 +2379,7 @@ async function buildCustomSet(qbanks){
   // same combination of filters (tracked via custom_filter_key on our own
   // past 'custom' sets — see the Supabase notes for why this needs no extra
   // tracking table).
-  const filterKey = `${qbankId}|${ctState.folders.slice().sort().join(',')}|${ctState.sections.slice().sort().join(',')}|${difficulty}|${category}`;
+  const filterKey = `${qbankId}|${ctState.folder}|${ctState.subfolder}|${ctState.section}|${difficulty}|${category}`;
   const { data: pastSets } = await sb.from('sets').select('question_ids').eq('user_id', S.profile.id).eq('set_type','custom').eq('custom_filter_key', filterKey);
   const usedBefore = new Set();
   (pastSets||[]).forEach(s=> (s.question_ids||[]).forEach(id=>usedBefore.add(id)));
@@ -2400,8 +2410,9 @@ async function buildCustomSet(qbanks){
   for(let i=candidateIds.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [candidateIds[i],candidateIds[j]]=[candidateIds[j],candidateIds[i]]; }
   const picked = candidateIds.slice(0, numQuestions);
 
-  const folderLabel = ctState.sections.length ? `${ctState.sections.length} section${ctState.sections.length>1?'s':''}`
-    : ctState.folders.length ? ctState.folders.join(', ')
+  const folderLabel = ctState.section!=='__all__' ? leafNameOf(folders.find(f=>f.id===ctState.section)?.name||'Section')
+    : ctState.subfolder!=='__all__' ? ctState.subfolder
+    : ctState.folder!=='__all__' ? ctState.folder
     : 'All folders';
   const diffLabel = {all:'All', hard:'Hard', medium:'Medium', easy:'Easy'}[difficulty];
   const catLabel = category==='all' ? 'All' : category==='none' ? 'None' : CATS.find(c=>c.key===category)?.label;
