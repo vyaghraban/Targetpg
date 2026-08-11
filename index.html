@@ -3095,16 +3095,29 @@ async function buildSessionCombinedReview(sessionId){
 async function submitAttempt(att, set, questions, auto){
   clearInterval(timerHandle);
   const { data: qs } = await sb.from('questions').select('id, correct_index').in('id', set.question_ids);
+
+  // Default marking is +4 / -1 / 0 unattempted. INICET and UPSC CMS
+  // sections use their own real exam scheme instead: +1 / -1/3 / 0.
+  let marking = { correct: 4, wrong: -1 };
+  if(set.folder_id){
+    const { data: folder } = await sb.from('folders').select('name').eq('id', set.folder_id).maybeSingle();
+    const fname = (folder?.name || '').toLowerCase();
+    if(fname.includes('inicet') || fname.includes('upsc cms')){
+      marking = { correct: 1, wrong: -1/3 };
+    }
+  }
+
   let score=0, correctCount=0;
   const statPairs = [];
   for(const q of qs){
     const a=att.answers[q.id];
     if(a && (a.status==='answered'||a.status==='answered_marked')){
       const wasCorrect = a.selected===q.correct_index;
-      if(wasCorrect){ score+=4; correctCount++; } else { score-=1; }
+      if(wasCorrect){ score+=marking.correct; correctCount++; } else { score+=marking.wrong; }
       statPairs.push({ questionId: q.id, wasCorrect });
     }
   }
+  score = Math.round(score*100)/100; // keep -1/3 marking from leaving long float noise (e.g. 40.666666667)
   await idbSaveAnswers(att.id, att.answers);
   await sb.from('attempts').update({status:'submitted', submitted_at:new Date().toISOString(), score, correct_count:correctCount, total_questions:qs.length}).eq('id', att.id);
   bumpQuestionStats(statPairs).catch(e=>console.error('question stats update failed', e));
