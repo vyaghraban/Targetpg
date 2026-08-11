@@ -72,8 +72,17 @@ html.sky{
 }
 *{box-sizing:border-box;}
 @media(prefers-reduced-motion: reduce){ *{animation-duration:.001ms !important; animation-iteration-count:1 !important; transition-duration:.001ms !important; scroll-behavior:auto !important;} }
-html,body{margin:0;padding:0;background:var(--bg-image);background-attachment:fixed;color:var(--text);font-family:var(--body);height:100%;font-size:17.5px;-webkit-font-smoothing:antialiased;}
-body{position:relative;}
+/* background-color (not just background-image) on every layer that can be
+   visible mid-transition — the shorthand `background:` below resets
+   background-color to transparent, so without this, any moment where the
+   gradient hasn't painted yet (route swap, overscroll bounce, GPU repaint)
+   shows the browser's default white canvas through the gap. That flash is
+   what page-transition fix #1 targets. */
+html{background-color:var(--bg);}
+html,body{margin:0;padding:0;background:var(--bg-image);background-attachment:fixed;color:var(--text);font-family:var(--body);height:100%;font-size:17.5px;-webkit-font-smoothing:antialiased;overscroll-behavior-y:none;}
+body{position:relative;background-color:var(--bg);}
+#app{position:relative;min-height:100%;background-color:transparent;}
+::view-transition-old(root),::view-transition-new(root){animation-duration:.18s;animation-timing-function:var(--ease);}
 body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.5;
   background-image:repeating-linear-gradient(180deg, rgba(255,255,255,.012) 0px, rgba(255,255,255,.012) 1px, transparent 1px, transparent 3px);}
 html.light body::before{opacity:.35; background-image:repeating-linear-gradient(180deg, rgba(20,15,5,.01) 0px, rgba(20,15,5,.01) 1px, transparent 1px, transparent 3px);}
@@ -290,7 +299,15 @@ th{color:var(--text-dim);font-weight:600;font-size:12px;text-transform:uppercase
 .accbar-fill{height:100%;border-radius:6px;background:linear-gradient(90deg,var(--cyan),var(--green));}
 .stat-big{font-family:var(--mono);font-size:32px;font-weight:600;background:linear-gradient(135deg,var(--amber),var(--amber-2));-webkit-background-clip:text;background-clip:text;color:transparent;}
 .divider{height:1px;background:linear-gradient(90deg, transparent, var(--border), transparent);margin:16px 0;}
-.qimg{max-width:100%;border-radius:10px;margin:10px 0;display:block;background:var(--surface-2);min-height:60px;box-shadow:var(--shadow-sm);}
+.qimg{max-width:100%;border-radius:10px;margin:10px 0;display:block;background:var(--surface-2);min-height:60px;box-shadow:var(--shadow-sm);cursor:zoom-in;touch-action:manipulation;}
+.pw-wrap{position:relative;}
+.pw-wrap input{padding-right:46px;}
+.pw-toggle{position:absolute;right:4px;top:50%;transform:translateY(-50%);background:transparent;backdrop-filter:none;border:none;box-shadow:none;padding:8px 10px;min-height:auto;font-size:17px;line-height:1;color:var(--text-dim);opacity:.85;}
+.pw-toggle:active{transform:translateY(-50%) scale(.92);}
+.imgzoom-overlay{position:fixed;inset:0;background:rgba(4,6,12,.96);z-index:500;display:flex;align-items:center;justify-content:center;overflow:hidden;animation:fadeIn .16s ease both;touch-action:none;}
+.imgzoom-img{max-width:92vw;max-height:92vh;touch-action:none;user-select:none;-webkit-user-select:none;cursor:grab;transform-origin:center center;will-change:transform;}
+.imgzoom-close{position:absolute;top:calc(14px + env(safe-area-inset-top));right:16px;width:40px;height:40px;min-height:40px;border-radius:50%;background:rgba(255,255,255,.12);color:#fff;font-size:18px;padding:0;z-index:2;}
+.imgzoom-hint{position:absolute;bottom:calc(18px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);color:rgba(255,255,255,.75);font-size:12.5px;font-family:var(--body);white-space:nowrap;pointer-events:none;}
 .filepick{border:1px dashed var(--border);border-radius:10px;padding:14px;margin-top:6px;transition:border-color .18s;}
 .filepick:hover{border-color:var(--amber);}
 .themebtn{background:var(--surface-2);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:9px 12px;font-size:17px;min-height:auto;line-height:1;transition:transform .2s var(--ease), border-color .2s;}
@@ -400,6 +417,15 @@ import { sb, bumpQuestionStats } from './supabase-client.js';
 // =====================================================================
 
 const ADMIN_EMAIL = 'vithalswamy111@gmail.com';
+const SECURITY_QUESTIONS = [
+  "What was your childhood nickname?",
+  "What is the name of your first school?",
+  "What is your favorite teacher's name?",
+  "What city were you born in?",
+  "What was the name of your first pet?",
+  "What is your mother's maiden name?",
+  "Write your own question…"
+];
 const UPI_ID = '9145891969@ptyes';
 const UPI_PAYEE_NAME = 'NeetPG QBank';
 // Supabase/PostgREST silently caps any .select() with no .range() at ~1000
@@ -591,10 +617,18 @@ function categoryOf(f){
 let S = { session:null, profile:null, deviceId:null, view:'loading', nav:{}, instructionsAcked:{}, announcement:null };
 
 // ---------- theme (dark / light) ----------
+// theme-color colors below must mirror each theme's --bg value above —
+// kept as a small lookup (rather than reading the CSS var) because the
+// <meta name="theme-color"> tag is what the OS/browser paints behind the
+// status bar and during overscroll *before* our CSS has necessarily
+// applied, so it needs to be right immediately on theme switch too.
+const THEME_BG = { dark:'#070B14', light:'#F5F2E9', sky:'#EAF5FD' };
 function applyTheme(){
   const t = localStorage.getItem('qb_theme') || 'dark';
   document.documentElement.classList.toggle('light', t==='light');
   document.documentElement.classList.toggle('sky', t==='sky');
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if(meta) meta.setAttribute('content', THEME_BG[t] || THEME_BG.dark);
 }
 function themeIcon(t){ return t==='dark' ? '☀️' : t==='light' ? '🌤️' : '🌙'; }
 function currentTheme(){ return localStorage.getItem('qb_theme') || 'dark'; }
@@ -908,9 +942,130 @@ function richBlock(raw, imageUrl){
   return html;
 }
 
+// ---------- inline image zoom (pinch-to-zoom) ----------
+// Any <img class="qimg"> (question images, in both the live exam view and
+// the review screen) becomes zoomable in place: tap/click opens a
+// full-screen overlay with the same image, pinch (touch), mouse-wheel, or
+// double-tap/double-click to zoom, and drag to pan while zoomed. Delegated
+// on document once at boot so it works no matter which render* function
+// put the image on screen or how many times the screen re-renders.
+function openImageZoom(src){
+  const overlay = document.createElement('div');
+  overlay.className = 'imgzoom-overlay';
+  overlay.innerHTML = `<button class="imgzoom-close" id="imgzoomClose" aria-label="Close">✕</button>
+    <div class="imgzoom-hint" id="imgzoomHint">Pinch or scroll to zoom · drag to pan · double-tap to reset</div>
+    <img class="imgzoom-img" id="imgzoomImg" src="${escapeHtml(src)}" alt="question image, zoomed">`;
+  document.body.appendChild(overlay);
+  const img = overlay.querySelector('#imgzoomImg');
+  let scale=1, originX=0, originY=0, panX=0, panY=0, startDist=0, startScale=1, dragging=false, lastX=0, lastY=0, pinching=false;
+  const MIN=1, MAX=6;
+  function apply(){ img.style.transform = `translate(${panX}px,${panY}px) scale(${scale})`; }
+  function clampPan(){
+    // keep at least a sliver of the image on-screen instead of letting it
+    // get dragged away entirely, without a full bounds calc — good enough
+    // for a review/zoom overlay rather than a full image editor.
+    const maxPan = 400 * scale;
+    panX = Math.max(-maxPan, Math.min(maxPan, panX));
+    panY = Math.max(-maxPan, Math.min(maxPan, panY));
+  }
+  function reset(){ scale=1; panX=0; panY=0; apply(); }
+  img.addEventListener('wheel', (e)=>{
+    e.preventDefault();
+    const delta = e.deltaY < 0 ? 1.15 : 1/1.15;
+    scale = Math.max(MIN, Math.min(MAX, scale*delta));
+    if(scale===MIN){ panX=0; panY=0; }
+    clampPan(); apply();
+  }, {passive:false});
+  img.addEventListener('dblclick', ()=>{ scale = scale>1 ? 1 : 2.5; panX=0; panY=0; apply(); });
+  let lastTap=0;
+  img.addEventListener('touchstart', (e)=>{
+    if(e.touches.length===2){
+      pinching = true; dragging = false;
+      startDist = Math.hypot(e.touches[0].clientX-e.touches[1].clientX, e.touches[0].clientY-e.touches[1].clientY);
+      startScale = scale;
+    } else if(e.touches.length===1){
+      const now = Date.now();
+      if(!pinching && now - lastTap < 280){ reset(); lastTap=0; return; }
+      lastTap = now;
+      dragging = true; lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
+    }
+  }, {passive:true});
+  img.addEventListener('touchmove', (e)=>{
+    if(e.touches.length===2){
+      e.preventDefault();
+      pinching = true;
+      const dist = Math.hypot(e.touches[0].clientX-e.touches[1].clientX, e.touches[0].clientY-e.touches[1].clientY);
+      scale = Math.max(MIN, Math.min(MAX, startScale * (dist/startDist)));
+      if(scale===MIN){ panX=0; panY=0; }
+      clampPan(); apply();
+    } else if(dragging && scale>1 && e.touches.length===1){
+      e.preventDefault();
+      panX += e.touches[0].clientX - lastX; panY += e.touches[0].clientY - lastY;
+      lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
+      clampPan(); apply();
+    }
+  }, {passive:false});
+  img.addEventListener('touchend', (e)=>{
+    if(e.touches.length===1){
+      // dropped from 2 fingers to 1 (pinch ending) — re-anchor the pan
+      // drag from wherever the remaining finger is now, instead of using
+      // the stale coordinates from before the pinch, which used to cause
+      // a jump.
+      pinching = false; dragging = true;
+      lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
+    } else if(e.touches.length===0){
+      pinching = false; dragging = false;
+    }
+  });
+  img.addEventListener('mousedown', (e)=>{ if(scale<=1) return; dragging=true; lastX=e.clientX; lastY=e.clientY; e.preventDefault(); });
+  window.addEventListener('mousemove', (e)=>{ if(!dragging || scale<=1) return; panX += e.clientX-lastX; panY += e.clientY-lastY; lastX=e.clientX; lastY=e.clientY; clampPan(); apply(); });
+  window.addEventListener('mouseup', ()=>{ dragging=false; });
+  const close = ()=> overlay.remove();
+  document.getElementById('imgzoomClose').onclick = close;
+  overlay.addEventListener('click', (e)=>{ if(e.target===overlay) close(); });
+  document.addEventListener('keydown', function onEsc(e){ if(e.key==='Escape'){ close(); document.removeEventListener('keydown', onEsc); } });
+}
+document.addEventListener('click', (e)=>{
+  const img = e.target.closest('img.qimg');
+  if(img && img.src) openImageZoom(img.src);
+});
+
 // ---------- boot ----------
+// Supabase's confirmation/reset-password emails redirect back here with
+// either `#access_token=...&type=signup` (or `type=recovery`) in the hash,
+// or `#error=...&error_code=...&error_description=...` if the link was
+// stale/already used. supabase-js's own client (detectSessionInUrl, on by
+// default) turns a valid token into a real session before boot() ever asks
+// for one below — the "blank page" bug was that nothing here ever looked
+// at *why* it landed on this URL, so a valid confirm silently dropped the
+// user on whatever the default screen is with no "you're verified!"
+// moment, and an expired/error link showed nothing at all instead of an
+// explanation. This surfaces both, then scrubs the tokens out of the URL
+// so a page refresh doesn't try to "confirm" the same link twice.
+function handleAuthRedirect(){
+  const hashParams = location.hash.length>1 ? new URLSearchParams(location.hash.slice(1)) : new URLSearchParams();
+  const searchParams = new URLSearchParams(location.search);
+  const type = hashParams.get('type') || searchParams.get('type');
+  const errorCode = hashParams.get('error_code') || searchParams.get('error_code');
+  const errorDesc = hashParams.get('error_description') || searchParams.get('error_description');
+  const hadAuthParams = type || errorCode || hashParams.get('access_token') || searchParams.get('code');
+  if(errorCode){
+    S.authNotice = 'linkError';
+    S.authNoticeMsg = errorDesc ? decodeURIComponent(errorDesc.replace(/\+/g,' ')) : 'That link is invalid or has expired — request a new one.';
+  } else if(type==='signup' || type==='email_change'){
+    S.authNotice = 'confirmed';
+  } else if(type==='recovery'){
+    S.authMode = 'reset';
+  }
+  if(hadAuthParams){
+    ['code','type','error_code','error_description','error'].forEach(k=>searchParams.delete(k));
+    const qs = searchParams.toString();
+    history.replaceState(null, '', location.pathname + (qs?('?'+qs):''));
+  }
+}
 async function boot(){
   S.deviceId = getDeviceId();
+  handleAuthRedirect();
   const { data:{ session } } = await sb.auth.getSession();
   S.session = session;
   await Promise.all([ session ? loadProfile() : Promise.resolve(), loadAnnouncement() ]);
@@ -1058,6 +1213,7 @@ async function registerDevice(){
 // ---------- render dispatcher ----------
 function render(){
   navToken++;
+  if(S.authNotice==='confirmed' && !S.session){ return renderEmailConfirmed(); }
   if(!S.session){ return renderAuth(); }
   if(S.deviceBlocked){
     app.innerHTML = `<div class="container"><div class="card"><h2>Device limit reached</h2>
@@ -1313,8 +1469,34 @@ async function saveEditProfile(overlay){
 }
 
 // ================= AUTH =================
+// Dedicated full-screen landing page for the "Confirm your email" link —
+// this is deliberately its own screen (not just a small banner folded
+// into the login form) because that email link is the very first thing a
+// brand-new user sees after signing up: it should feel like a clean,
+// on-brand "you're in" moment, not an incidental notice. Same gradient
+// background, display font, and amber accent as the rest of the app.
+function renderEmailConfirmed(){
+  app.innerHTML = `
+  <div class="container" style="max-width:440px;padding-top:16vh;text-align:center;">
+    <div class="card" style="padding:36px 28px;">
+      <div style="font-size:52px;line-height:1;margin-bottom:6px;">🎉</div>
+      <div class="brand" style="justify-content:center;font-size:32px;font-family:var(--display);font-weight:700;margin-bottom:4px;">
+        <span style="background:linear-gradient(135deg,var(--amber),var(--amber-2));-webkit-background-clip:text;background-clip:text;color:transparent;">Happy Learning!</span>
+      </div>
+      <h2 style="font-family:var(--display);font-size:20px;margin:10px 0 6px;">Sign up done ✅</h2>
+      <p class="muted" style="font-size:15px;line-height:1.6;margin:0 0 26px;">Your email is confirmed. Log in to start practicing.</p>
+      <button class="primary" id="ecGoLogin" style="width:100%;">Log in to use the app</button>
+    </div>
+  </div>`;
+  document.getElementById('ecGoLogin').onclick = ()=>{
+    S.authNotice = null;
+    S.authMode = 'login';
+    render();
+  };
+}
 function renderAuth(){
   S.authMode = S.authMode || 'login';
+  if(S.authMode==='signup' && !S.suSecQ) S.suSecQ = SECURITY_QUESTIONS[0];
   app.innerHTML = `
   <div class="container" style="max-width:420px;padding-top:14vh;">
     <div class="row" style="justify-content:flex-end;">${themeSwatchesHtml()}</div>
@@ -1326,7 +1508,8 @@ function renderAuth(){
       ${S.authNotice ? `<div class="muted" style="color:var(--red);border:1px solid var(--red);border-radius:10px;padding:10px 12px;margin-bottom:14px;">${
         S.authNotice==='expired' ? '⏳ Your subscription has expired. You have been signed out — renew to continue.' :
         S.authNotice==='revoked' ? '🔒 Your access was revoked by admin. You have been signed out.' :
-        S.authNotice==='deleted' ? '🗑️ Your account was removed by admin.' : ''
+        S.authNotice==='deleted' ? '🗑️ Your account was removed by admin.' :
+        S.authNotice==='linkError' ? `⚠️ ${escapeHtml(S.authNoticeMsg||'That link is invalid or has expired.')}` : ''
       }</div>` : ''}
       ${S.authMode==='reset' ? `
       <a href="javascript:void(0)" id="backToLogin" class="muted" style="font-size:13px;display:inline-block;margin-bottom:10px;">← Back to login</a>
@@ -1342,7 +1525,8 @@ function renderAuth(){
         <div class="tab ${S.authMode==='signup'?'on':''}" data-m="signup">Sign up</div>
       </div>
       <label>Email</label><input id="email" type="email" placeholder="you@example.com">
-      <label>Password</label><input id="pass" type="password" placeholder="••••••••">
+      <label>Password</label>
+      <div class="pw-wrap"><input id="pass" type="password" placeholder="••••••••"><button type="button" class="pw-toggle" id="passToggle" tabindex="-1" aria-label="Show password">👁</button></div>
       ${S.authMode==='login' ? `<div style="text-align:right;margin:-6px 0 12px;"><a href="javascript:void(0)" id="forgotLink" class="muted" style="font-size:12.5px;">Forgot password?</a></div>` : ''}
       ${S.authMode==='signup' ? `
       <label>Full name *</label><input id="suName" placeholder="Your name" required>
@@ -1355,6 +1539,11 @@ function renderAuth(){
       <div class="filepick"><input id="suAvatar" type="file" accept="image/*" required></div>
       <label>College ID (photo/scan) *</label>
       <div class="filepick"><input id="suCollegeId" type="file" accept="image/*,.pdf" required></div>
+      <label>Security question *</label>
+      <div class="csel-trigger" id="suSecQTrigger" style="margin-bottom:${S.suSecCustom?'8px':'12px'};"><span id="suSecQLabel">${escapeHtml(S.suSecQ || SECURITY_QUESTIONS[0])}</span><span class="csel-chev">▾</span></div>
+      ${S.suSecCustom ? `<input id="suSecQCustom" placeholder="Write your own question" value="${escapeHtml(S.suSecQCustomVal||'')}" style="margin-bottom:12px;">` : ''}
+      <label>Answer *</label><input id="suSecA" placeholder="Your answer" autocomplete="off" value="${escapeHtml(S.suSecA||'')}">
+      <div class="muted" style="font-size:11.5px;margin-top:-6px;margin-bottom:12px;">Used only to help verify it's you if you ever need account recovery. Pick something only you'd know.</div>
       ` : ''}
       <div id="authErr" class="muted" style="color:var(--red);margin-top:8px;"></div>
       <button class="primary" id="authGo" style="width:100%;margin-top:16px;">${S.authMode==='login'?'Login':'Create account'}</button>
@@ -1363,6 +1552,31 @@ function renderAuth(){
   </div>`;
   document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{S.authMode=t.dataset.m; renderAuth();});
   wireThemeSwatches();
+  if(document.getElementById('passToggle')){
+    document.getElementById('passToggle').onclick = ()=>{
+      const pw = document.getElementById('pass');
+      const btn = document.getElementById('passToggle');
+      const showing = pw.type === 'text';
+      pw.type = showing ? 'password' : 'text';
+      btn.textContent = showing ? '👁' : '🙈';
+      btn.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
+    };
+  }
+  if(S.authMode==='signup'){
+    document.getElementById('suSecQTrigger').onclick = (e)=>{
+      e.stopPropagation();
+      openCselSheet(
+        SECURITY_QUESTIONS.map(q=>({value:q, label:q})),
+        S.suSecQ,
+        (v)=>{
+          S.suSecCustom = (v === "Write your own question…");
+          S.suSecQ = S.suSecCustom ? "" : v;
+          renderAuth();
+        }
+      );
+    };
+    if(document.getElementById('suSecQCustom')) document.getElementById('suSecQCustom').oninput = (e)=>{ S.suSecQCustomVal = e.target.value; };
+  }
   if(S.authMode==='reset'){
     document.getElementById('backToLogin').onclick = ()=>{ S.authMode='login'; renderAuth(); };
     document.getElementById('rsGo').onclick = async ()=>{
@@ -1394,14 +1608,25 @@ function renderAuth(){
       const college = document.getElementById('suCollege').value.trim();
       const avatarFile = document.getElementById('suAvatar').files[0];
       const idFile = document.getElementById('suCollegeId').files[0];
+      const secQuestion = (S.suSecCustom ? (document.getElementById('suSecQCustom')?.value||'').trim() : (S.suSecQ||'').trim());
+      const secAnswer = document.getElementById('suSecA').value.trim();
       if(!name){ errEl.textContent='Enter your name.'; return; }
       if(!age){ errEl.textContent='Enter your age.'; return; }
       if(!batch){ errEl.textContent='Enter your batch.'; return; }
       if(!college){ errEl.textContent='Enter your college.'; return; }
       if(!avatarFile){ errEl.textContent='Upload a profile picture.'; return; }
       if(!idFile){ errEl.textContent='Upload your college ID.'; return; }
+      if(!secQuestion){ errEl.textContent='Pick or write a security question.'; return; }
+      if(!secAnswer){ errEl.textContent='Enter an answer to your security question.'; return; }
       btn.disabled = true; btn.textContent = 'Creating account…';
-      const { error, data: suData } = await sb.auth.signUp({ email, password });
+      // emailRedirectTo is set explicitly (rather than relying only on the
+      // dashboard's "Site URL") so the confirmation link always lands back
+      // on whatever domain the app is actually running on — see Supabase
+      // Dashboard -> Authentication -> URL Configuration for the matching
+      // required setup (that domain must also be added to the Redirect
+      // URLs allow-list there, or Supabase will refuse the redirect and
+      // show its own blank/error page instead of ever reaching the app).
+      const { error, data: suData } = await sb.auth.signUp({ email, password, options: { emailRedirectTo: window.location.origin + window.location.pathname } });
       if(error){ errEl.textContent=error.message; btn.disabled=false; btn.textContent='Create account'; return; }
       toast('Account created. Signing you in…');
       const { error: siErr } = await sb.auth.signInWithPassword({ email, password });
@@ -1422,7 +1647,15 @@ function renderAuth(){
         if(!up.error){ extra.college_id_path = up.url; }
       }
       await sb.from('profiles').update(extra).eq('id', uid);
-      S.profile = { ...S.profile, ...extra };
+      // Security question/answer go through a dedicated RPC rather than a
+      // plain profiles update — profiles.security_answer_hash is a
+      // privileged field a non-admin can't write directly (see
+      // protect_profile_privileged_fields() in the SQL), and the answer
+      // needs to be hashed server-side, never sent back to the client.
+      const { error: secErr } = await sb.rpc('set_my_security_question', { p_question: secQuestion, p_answer: secAnswer });
+      if(secErr) console.error('[security question]', secErr);
+      S.profile = { ...S.profile, ...extra, security_question: secQuestion };
+      S.suSecQ = null; S.suSecCustom = false; S.suSecQCustomVal = ''; S.suSecA = '';
       render();
       return;
     }
@@ -3361,12 +3594,37 @@ function renderQueryForm(body, q, a){
     body.innerHTML = `<p>✅ Query submitted — the admin will review it.</p>`;
   };
 }
+// html2canvas 1.4.1 paints from its own re-implementation of CSS, not the
+// real browser engine — it does not understand modern color functions like
+// color-mix() and is unreliable resolving var(--x) on box-shadow / gradient
+// shorthands. Since the green/red "correct" and "wrong" indicators on
+// .opt.correct / .opt.wrong (and most of this stylesheet's colors) are
+// defined via CSS custom properties, html2canvas was silently falling back
+// to no color for them — that's the missing-icon bug. The fix: right before
+// capture, walk every element inside the capture node and bake its *actual*
+// resolved color (from getComputedStyle, which the real browser has already
+// resolved var()/color-mix() for) into an inline style, so html2canvas has
+// nothing left to re-interpret. Restore the original inline styles after.
+function inlineResolvedColors(root){
+  const PROPS = ['color','background-color','border-top-color','border-right-color','border-bottom-color','border-left-color','box-shadow'];
+  const restore = [];
+  const all = [root, ...root.querySelectorAll('*')];
+  all.forEach(el=>{
+    const cs = getComputedStyle(el);
+    const prevInline = el.getAttribute('style');
+    restore.push([el, prevInline]);
+    PROPS.forEach(p=>{ el.style.setProperty(p, cs.getPropertyValue(p)); });
+    el.style.setProperty('background-image', 'none'); // drop gradients html2canvas can't parse (color-mix stops); solid background-color above already carries the real color
+  });
+  return ()=> restore.forEach(([el, prev])=>{ if(prev===null) el.removeAttribute('style'); else el.setAttribute('style', prev); });
+}
 async function captureShot(withExpl){
   const node=document.getElementById('revCapture');
   const explDiv = node.querySelector('.divider')?.nextElementSibling;
   const dividerEl = node.querySelector('.divider');
   let hid=false;
   if(!withExpl && dividerEl){ dividerEl.style.display='none'; if(explDiv) explDiv.style.display='none'; hid=true; }
+  const restoreColors = inlineResolvedColors(node);
   let canvas;
   try{
     canvas = await html2canvas(node, {backgroundColor:'#141B2E', useCORS:true, imageTimeout:15000});
@@ -3380,11 +3638,13 @@ async function captureShot(withExpl){
       canvas = await html2canvas(node, {backgroundColor:'#141B2E'});
       toast('Saved, but the image couldn\'t be captured (host doesn\'t allow it)');
     }catch(err2){
+      restoreColors();
       if(hid){ dividerEl.style.display=''; if(explDiv) explDiv.style.display=''; }
       toast('Screenshot failed — try again');
       return;
     }
   }
+  restoreColors();
   if(hid){ dividerEl.style.display=''; if(explDiv) explDiv.style.display=''; }
   const link=document.createElement('a');
   link.download = 'question_'+Date.now()+'.png';
@@ -3397,10 +3657,33 @@ async function captureShot(withExpl){
 // restores, which just set S.exam/S.review and call render(), land back on
 // the right screen)
 const _origRender = render;
-render = function(){
+const _routedRender = function(){
   if(S.session && S.view==='exam' && S.exam){ return renderExam(); }
   if(S.session && S.review){ return renderReviewChoice(); }
   return _origRender();
+};
+// Smooth cross-fade between screens instead of an instant innerHTML swap —
+// the instant swap is what reads as a "flash": the outgoing screen's
+// content (and whatever the browser was mid-repainting) disappears in one
+// frame and the new screen pops in the next. document.startViewTransition
+// (Chrome/Android WebView/Edge) captures the before/after and cross-fades
+// them for free; everywhere else falls back to a quick opacity tween that
+// still avoids the hard cut. Either path keeps the same solid `--bg` behind
+// it the whole time (set above), so there's no unpainted gap to flash white.
+render = function(){
+  if(!app) return _routedRender();
+  if(typeof document.startViewTransition === 'function'){
+    document.startViewTransition(()=> _routedRender());
+    return;
+  }
+  app.style.transition = 'none';
+  app.style.opacity = '0';
+  const result = _routedRender();
+  requestAnimationFrame(()=>{
+    app.style.transition = 'opacity .16s var(--ease)';
+    app.style.opacity = '1';
+  });
+  return result;
 };
 
 // ================= ADMIN SIDE =================
@@ -4898,7 +5181,10 @@ async function renderUserModalBody(uid, overlay){
             <div class="muted" style="font-size:12px;margin-top:4px;">🙋 Referee gets <b>${c.referee_discount_pct}%</b> off on joining</div>
             ${c.milestone_reached?`<span class="badge active" style="margin-top:6px;display:inline-block;">Milestone unlocked — referrer gets ${c.milestone_discount_pct}% off</span>`:`<span class="badge pending" style="margin-top:6px;display:inline-block;">Referrer gets ${c.milestone_discount_pct}% off at ${c.target_quota} joins</span>`}
           </div>
-          <button class="subtle umCopyCoupon" data-code="${c.code}" style="padding:8px 14px;font-size:13px;white-space:nowrap;">📋 Copy Code</button>
+          <div class="row" style="gap:6px;flex-direction:column;">
+            <button class="subtle umCopyCoupon" data-code="${c.code}" style="padding:8px 14px;font-size:13px;white-space:nowrap;">📋 Copy Code</button>
+            <button class="danger umDeleteCoupon" data-id="${c.id}" data-code="${c.code}" style="padding:8px 14px;font-size:13px;white-space:nowrap;">🗑️ Delete</button>
+          </div>
         </div>`).join(''):'<p class="muted" style="font-size:13px;">No coupon generated for this user yet.</p>'}
     </div>
     ${u.promoter_milestone_available?`<div class="idcallout" style="border-color:var(--green);"><div><b>🎉 ${u.promoter_milestone_discount_pct}% milestone discount</b> ready for this user's next transaction.</div></div>`:''}
@@ -4966,6 +5252,16 @@ async function renderUserModalBody(uid, overlay){
   };
   body.querySelectorAll('.umCopyCoupon').forEach(b=>{
     b.onclick = ()=> copyToClipboard(b.dataset.code, b);
+  });
+  body.querySelectorAll('.umDeleteCoupon').forEach(b=>{
+    b.onclick = async ()=>{
+      if(!confirm(`Delete coupon ${b.dataset.code}? Anyone still holding this code won't be able to redeem it anymore. This can't be undone.`)) return;
+      b.disabled = true; b.textContent = 'Deleting…';
+      const { error: delErr } = await sb.from('coupons').delete().eq('id', b.dataset.id);
+      if(delErr){ toast('Delete failed — '+delErr.message); b.disabled=false; b.textContent='🗑️ Delete'; return; }
+      toast(`Coupon ${b.dataset.code} deleted`);
+      renderUserModalBody(uid, overlay);
+    };
   });
   document.getElementById('umCpGenerate').onclick = async ()=>{
     const genBtn = document.getElementById('umCpGenerate');
