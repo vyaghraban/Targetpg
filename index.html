@@ -771,6 +771,7 @@ function fmtTime(sec){
 }
 function statusOf(a){ return a ? a.status : 'not_visited'; }
 function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function debounce(fn, ms){ let t; return (...args)=>{ clearTimeout(t); t=setTimeout(()=>fn(...args), ms); }; }
 // Strips tags, inline event handlers and javascript: URIs from any free-text
 // field before it is written to Supabase. escapeHtml() protects render-time
 // output; this protects the data itself, so a stored value can never carry
@@ -1069,6 +1070,7 @@ async function boot(){
   const { data:{ session } } = await sb.auth.getSession();
   S.session = session;
   await Promise.all([ session ? loadProfile() : Promise.resolve(), loadAnnouncement() ]);
+  if(S.profile) await loadPersonalAnnouncement();
   const shortcut = new URLSearchParams(location.search).get('shortcut');
   if(shortcut && S.profile && S.profile.role!=='admin'){ S.utab = shortcut; }
   render();
@@ -1157,7 +1159,40 @@ function bindAnnouncementBanner(){
     const el = document.getElementById('announceBanner'); if(el) el.remove();
   };
 }
-// Polls for a new/cleared announcement every couple of minutes so it shows
+// ---------- personal (per-user) announcement banner ----------
+// Same idea as the global one above, but targeted: an admin can send a
+// note to just ONE student (e.g. "your payment screenshot was unclear,
+// please re-upload") instead of broadcasting to everyone. Dismissing it
+// permanently deletes the row (dismiss_my_announcement RPC) rather than
+// flagging it inactive like the global one — keeps the table from
+// accumulating old rows forever, and it also means dismissal sticks even
+// if they open the app on a different device (nothing local to lose).
+async function loadPersonalAnnouncement(){
+  try{
+    const { data, error } = await sb.from('user_announcements').select('*').eq('user_id', S.profile.id).order('created_at',{ascending:false}).limit(1).maybeSingle();
+    S.personalAnnouncement = (!error && data) ? data : null;
+  }catch(e){ S.personalAnnouncement = null; }
+}
+function personalAnnouncementBannerHtml(){
+  if(!S.personalAnnouncement || !S.personalAnnouncement.text) return '';
+  return `<div class="announce-banner" id="personalAnnounceBanner" style="border-color:var(--purple);background:color-mix(in srgb, var(--purple) 14%, var(--surface));">
+    <span class="announce-text">💌 ${escapeHtml(S.personalAnnouncement.text)}</span>
+    <button class="announce-x" id="personalAnnounceDismiss" title="Dismiss">✕</button>
+  </div>`;
+}
+function bindPersonalAnnouncementBanner(){
+  const b = document.getElementById('personalAnnounceDismiss');
+  if(!b) return;
+  b.onclick = async ()=>{
+    const id = S.personalAnnouncement?.id;
+    const el = document.getElementById('personalAnnounceBanner'); if(el) el.remove();
+    S.personalAnnouncement = null;
+    if(id) await sb.rpc('dismiss_my_announcement', { p_id: id });
+  };
+}
+
+// Polls for a new/cleared announcement (global + personal) every couple of
+// minutes so it shows
 // up (or disappears) for users already mid-session, without needing a full
 // page reload. Only touches the DOM if a banner host is actually on screen
 // right now (exam/review screens render outside renderUser() and have none).
@@ -1167,10 +1202,12 @@ function startAnnouncementWatcher(){
   announceWatcherHandle = setInterval(async ()=>{
     if(!document.getElementById('announceBannerHost')) return;
     await loadAnnouncement();
+    await loadPersonalAnnouncement();
     const host = document.getElementById('announceBannerHost');
     if(!host) return;
-    host.innerHTML = announcementBannerHtml();
+    host.innerHTML = announcementBannerHtml() + personalAnnouncementBannerHtml();
     bindAnnouncementBanner();
+    bindPersonalAnnouncementBanner();
   }, 90000);
 }
 function startExpiryWatcher(){
@@ -1495,7 +1532,7 @@ function renderEmailConfirmed(){
   };
 }
 function renderAuth(){
-  S.authMode = S.authMode || 'login';
+  S.authMode = S.authMode || 'signup';
   if(S.authMode==='signup' && !S.suSecQ) S.suSecQ = SECURITY_QUESTIONS[0];
   app.innerHTML = `
   <div class="container" style="max-width:420px;padding-top:14vh;">
@@ -1682,7 +1719,7 @@ async function renderUser(){
   }
   S.utab = S.utab || 'qbanks';
   const adminBackBtn = S.profile?.role==='admin' ? `<button class="primary" id="backToAdminBtn" style="padding:8px 12px;font-size:12px;">← Back to Admin</button>` : '';
-  app.innerHTML = topbar('QBank Console', adminBackBtn) + `<div id="announceBannerHost">${announcementBannerHtml()}</div>`;
+  app.innerHTML = topbar('QBank Console', adminBackBtn) + `<div id="announceBannerHost">${announcementBannerHtml()}${personalAnnouncementBannerHtml()}</div>`;
   const streak = currentStreak();
   const pp = S.profile;
   const drawerProfileHtml = `<div class="drawer-profile">
@@ -1706,6 +1743,7 @@ async function renderUser(){
   app.innerHTML += drawerFrame(drawerNavHtml, drawerProfileHtml);
   bindTopbar();
   bindAnnouncementBanner();
+  bindPersonalAnnouncementBanner();
   if(document.getElementById('backToAdminBtn')) document.getElementById('backToAdminBtn').onclick = ()=>{ goTo({view:'admin', atab:'upload'}); };
   const wrap = document.createElement('div'); wrap.className='container';
   app.appendChild(wrap);
@@ -3796,6 +3834,80 @@ async function adminAnnounce(){
     await loadAnnouncement();
     adminAnnounce();
   };
+
+  // ---- personal (per-user) announcements ----
+  const { data: userAnns } = await sb.from('user_announcements').select('*, profiles(name,email)').order('created_at',{ascending:false});
+  body.insertAdjacentHTML('beforeend', `<div class="card" style="margin-top:16px;">
+    <h3>💌 Announce to a specific user</h3>
+    <p class="muted">Send a one-off note that only shows up for one student — search their name or email, pick them, then send.</p>
+    <label>Search user</label>
+    <input id="uaSearch" placeholder="Name or email">
+    <div id="uaResults" style="margin-top:8px;"></div>
+    <div id="uaCompose" style="display:none;margin-top:14px;">
+      <div class="muted" style="margin-bottom:6px;">Sending to: <b id="uaSelectedName" style="color:var(--text);"></b></div>
+      <label>Message</label>
+      <input id="uaText" maxlength="200" placeholder="e.g. Please re-upload a clearer college ID photo">
+      <div class="row" style="margin-top:12px;gap:10px;">
+        <button class="primary" id="uaSend">Send</button>
+        <button class="ghost" id="uaCancel">Cancel</button>
+      </div>
+      <div id="uaStatus" class="muted" style="margin-top:8px;"></div>
+    </div>
+    ${(userAnns||[]).length ? `<div style="margin-top:18px;">
+      <div class="muted" style="margin-bottom:8px;">Currently active</div>
+      ${userAnns.map(u=>`<div class="row" style="justify-content:space-between;align-items:center;background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:10px;padding:10px 13px;margin-bottom:8px;">
+        <div style="min-width:0;">
+          <div style="font-size:13px;font-weight:700;">${escapeHtml(u.profiles?.name||u.profiles?.email||'Unknown user')}</div>
+          <div class="muted" style="font-size:12.5px;">${escapeHtml(u.text)}</div>
+        </div>
+        <button class="danger uaClear" data-id="${u.id}" style="padding:7px 12px;font-size:12px;white-space:nowrap;">Clear</button>
+      </div>`).join('')}
+    </div>` : ''}
+  </div>`);
+  let uaSelectedUser = null;
+  const uaResults = document.getElementById('uaResults');
+  document.getElementById('uaSearch').oninput = debounce(async (e)=>{
+    const q = e.target.value.trim();
+    if(!q){ uaResults.innerHTML = ''; return; }
+    const { data: found } = await sb.rpc('admin_list_users', { p_search: q });
+    uaResults.innerHTML = (found||[]).slice(0,8).map(u=>`<div class="row uaPick" data-id="${u.id}" data-name="${escapeHtml(u.name||u.email||'Unknown')}" style="justify-content:space-between;align-items:center;padding:9px 12px;border:1px solid var(--border);border-radius:10px;margin-bottom:6px;cursor:pointer;">
+      <span style="font-size:13.5px;">${escapeHtml(u.name||'—')} <span class="muted">· ${escapeHtml(u.email||'')}</span></span>
+      <span class="muted" style="font-size:12px;">Select →</span>
+    </div>`).join('') || `<p class="muted" style="font-size:13px;">No match.</p>`;
+    uaResults.querySelectorAll('.uaPick').forEach(el=>{
+      el.onclick = ()=>{
+        uaSelectedUser = { id: el.dataset.id, name: el.dataset.name };
+        document.getElementById('uaSelectedName').textContent = uaSelectedUser.name;
+        document.getElementById('uaCompose').style.display = '';
+        document.getElementById('uaText').value = '';
+        document.getElementById('uaStatus').textContent = '';
+      };
+    });
+  }, 350);
+  document.getElementById('uaCancel').onclick = ()=>{ uaSelectedUser = null; document.getElementById('uaCompose').style.display = 'none'; };
+  document.getElementById('uaSend').onclick = async ()=>{
+    if(!uaSelectedUser) return;
+    const text = sanitizeInput(document.getElementById('uaText').value, 200);
+    const st = document.getElementById('uaStatus');
+    if(!text){ st.textContent = 'Type a message first.'; st.style.color = 'var(--red)'; return; }
+    st.textContent = 'Sending…'; st.style.color = '';
+    // Only one active personal announcement per user at a time — hard-
+    // delete any earlier one before adding the new one (not just mark it
+    // inactive), so old messages don't sit in the table forever.
+    await sb.from('user_announcements').delete().eq('user_id', uaSelectedUser.id);
+    const { error: e2 } = await sb.from('user_announcements').insert({ user_id: uaSelectedUser.id, text, posted_by: S.profile.id });
+    if(e2){ st.textContent = 'Failed: '+(e2.message||'unknown error'); st.style.color = 'var(--red)'; return; }
+    toast('Sent to '+uaSelectedUser.name);
+    adminAnnounce();
+  };
+  body.querySelectorAll('.uaClear').forEach(btn=>{
+    btn.onclick = async ()=>{
+      if(!confirm('Remove this announcement for this user?')) return;
+      await sb.from('user_announcements').delete().eq('id', btn.dataset.id);
+      toast('Cleared');
+      adminAnnounce();
+    };
+  });
 }
 async function adminUpload(){
   const body=document.getElementById('atabBody');
