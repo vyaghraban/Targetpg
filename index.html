@@ -1182,7 +1182,7 @@ async function loadPersonalAnnouncement(){
 }
 function personalAnnouncementBannerHtml(){
   if(!S.personalAnnouncement || !S.personalAnnouncement.text) return '';
-  return `<div class="announce-banner" id="personalAnnounceBanner" style="border-color:var(--purple);background:color-mix(in srgb, var(--purple) 14%, var(--surface));">
+  return `<div class="announce-banner" id="personalAnnounceBanner">
     <span class="announce-text">💌 ${escapeHtml(S.personalAnnouncement.text)}</span>
     <button class="announce-x" id="personalAnnounceDismiss" title="Dismiss">✕</button>
   </div>`;
