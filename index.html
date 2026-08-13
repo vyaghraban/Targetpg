@@ -1070,7 +1070,6 @@ async function boot(){
   const { data:{ session } } = await sb.auth.getSession();
   S.session = session;
   await Promise.all([ session ? loadProfile() : Promise.resolve(), loadAnnouncement() ]);
-  if(S.profile) await loadPersonalAnnouncement();
   const shortcut = new URLSearchParams(location.search).get('shortcut');
   if(shortcut && S.profile && S.profile.role!=='admin'){ S.utab = shortcut; }
   render();
@@ -1123,6 +1122,14 @@ async function loadProfile(){
   }
   S.view = S.profile?.role==='admin' ? 'admin' : 'user';
   if(S.profile) bumpStreak();
+  // loadProfile() is called from several places — initial boot, the
+  // login/signup submit handlers, and onAuthStateChange — but this was
+  // only ever fetched once, inside boot(). So a user who was already on
+  // the login screen (or mid-session) when an admin sent them a personal
+  // announcement never picked it up until either the 90s watcher happened
+  // to catch it or they did a hard page reload. Loading it here instead
+  // means every path that logs someone in gets it, not just a cold boot.
+  if(S.profile) await loadPersonalAnnouncement();
 }
 // Re-checks the logged-in user's own status/expiry every couple of minutes
 // so an expiry that lands *during* an open session (or an admin
