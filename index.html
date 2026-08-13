@@ -3354,7 +3354,14 @@ async function submitAttempt(att, set, questions, auto){
   await idbSaveAnswers(att.id, att.answers);
   await sb.from('attempts').update({status:'submitted', submitted_at:new Date().toISOString(), score, correct_count:correctCount, total_questions:qs.length}).eq('id', att.id);
   bumpQuestionStats(statPairs).catch(e=>console.error('question stats update failed', e));
-  att.status='submitted'; att.score=score;
+  // These three also get written to the DB above, but the report card
+  // screen right after this reads them off this same in-memory `att`
+  // object (S.review.att), not a fresh fetch — without setting them here
+  // too, correct_count/total_questions stayed undefined locally, so the
+  // "X/Y correct" line showed 0/undefined until the user backed out and
+  // came back in (which re-fetches the attempt from the DB, where the
+  // update above HAD landed).
+  att.status='submitted'; att.score=score; att.correct_count=correctCount; att.total_questions=qs.length;
 
   if(set.session_id){
     const { data: nextSet } = await sb.from('sets').select('*').eq('session_id', set.session_id).gt('set_number', set.set_number).order('set_number',{ascending:true}).limit(1).maybeSingle();
@@ -3607,6 +3614,16 @@ function renderQueryForm(body, q, a){
 // nothing left to re-interpret. Restore the original inline styles after.
 function inlineResolvedColors(root){
   const PROPS = ['color','background-color','border-top-color','border-right-color','border-bottom-color','border-left-color','box-shadow'];
+  // Also pin down opacity/transform/filter — the faded-out third option a
+  // user reported (readable in the app, washed-out in the saved image) is
+  // what a CSS entrance animation looks like mid-flight: `.opt` fades/
+  // slides in on insertion, and if getComputedStyle happens to be read a
+  // beat before that finishes (or html2canvas samples a stale paint from
+  // right before it), you get exactly that half-opacity look baked into
+  // the PNG even though the on-screen element has long since settled.
+  // Forcing these to their "settled" values removes that whole class of
+  // timing bug regardless of which element it hits.
+  const RESET_PROPS = { opacity:'1', transform:'none', filter:'none', 'backdrop-filter':'none', '-webkit-backdrop-filter':'none', animation:'none' };
   const restore = [];
   const all = [root, ...root.querySelectorAll('*')];
   all.forEach(el=>{
@@ -3615,9 +3632,15 @@ function inlineResolvedColors(root){
     restore.push([el, prevInline]);
     PROPS.forEach(p=>{ el.style.setProperty(p, cs.getPropertyValue(p)); });
     el.style.setProperty('background-image', 'none'); // drop gradients html2canvas can't parse (color-mix stops); solid background-color above already carries the real color
+    Object.entries(RESET_PROPS).forEach(([p,v])=> el.style.setProperty(p, v));
   });
   return ()=> restore.forEach(([el, prev])=>{ if(prev===null) el.removeAttribute('style'); else el.setAttribute('style', prev); });
 }
+// Waits a couple of paint frames so the browser has fully flushed layout/
+// style after inlineResolvedColors() mutates every element's inline style
+// (a big batch of style writes) before html2canvas reads it — without this,
+// html2canvas can start reading mid-reflow on slower phones.
+function nextPaint(){ return new Promise(res=> requestAnimationFrame(()=> requestAnimationFrame(res))); }
 async function captureShot(withExpl){
   const node=document.getElementById('revCapture');
   const explDiv = node.querySelector('.divider')?.nextElementSibling;
@@ -3625,6 +3648,7 @@ async function captureShot(withExpl){
   let hid=false;
   if(!withExpl && dividerEl){ dividerEl.style.display='none'; if(explDiv) explDiv.style.display='none'; hid=true; }
   const restoreColors = inlineResolvedColors(node);
+  await nextPaint();
   let canvas;
   try{
     canvas = await html2canvas(node, {backgroundColor:'#141B2E', useCORS:true, imageTimeout:15000});
