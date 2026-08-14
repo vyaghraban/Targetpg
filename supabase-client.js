@@ -30,7 +30,13 @@
 // SQL editor.
 // =====================================================================
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+// createClient comes from the global `supabase` object exposed by the
+// jsdelivr UMD <script> tag loaded in index.html's <head> (see the comment
+// there) — not an `import` from esm.sh. That UMD script is `defer`red and
+// placed earlier in the document than this module, so document-order
+// script execution guarantees it has already run and `window.supabase`
+// already exists by the time this line runs.
+const { createClient } = window.supabase;
 
 const SUPABASE_URL = 'https://ewchwphfzdsbmbchensk.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV3Y2h3cGhmemRzYm1iY2hlbnNrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU0OTE1MjEsImV4cCI6MjEwMTA2NzUyMX0.Py3deWkFWCU1RZt1Xa6fIa59oG3tAX8s_pnPrOQUraE';

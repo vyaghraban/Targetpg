@@ -36,6 +36,19 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js" defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js" defer></script>
+<!-- Supabase client library — loaded as a plain global-exposing UMD build
+     from jsdelivr instead of `import`-ing it from esm.sh inside
+     supabase-client.js. An ESM import of a package with its own several
+     internal sub-modules (which supabase-js has) makes the browser walk
+     the whole import graph over the network — one request per sub-module,
+     each one waiting on the last — before `createClient` is even
+     available; that request waterfall, not bandwidth, was the real cause
+     of the long "Q" splash-screen wait. jsdelivr's UMD build is ONE
+     pre-bundled file (must load before the `type="module"` script below,
+     which is why it's placed earlier in the document — deferred scripts
+     and modules both run in document order, so this is guaranteed to
+     finish first). -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" defer></script>
 <style>
 :root{
   --bg:#070B14; --surface:#111726; --surface-2:#182034; --surface-3:#1F2A42; --border:#28324E;
