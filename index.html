@@ -21,11 +21,21 @@
 <meta name="msapplication-config" content="none">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<!-- These are heavy libraries only needed for later user actions (screenshot
+     export, stats charts, PDF/ZIP export) — never at initial page load. Left
+     as plain blocking script tags (no defer/async), the browser has to fully
+     download+run all five, one after another, before it can even parse the
+     CSS below or paint anything — which is what was making first load feel
+     slow regardless of connection speed (it's a request-waterfall problem,
+     not a bandwidth one). `defer` lets the browser parse+paint the page
+     while these load in the background, and still guarantees they run in
+     this same order (so jspdf-autotable still attaches to jsPDF correctly)
+     before the page is considered loaded. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js" defer></script>
 <style>
 :root{
   --bg:#070B14; --surface:#111726; --surface-2:#182034; --surface-3:#1F2A42; --border:#28324E;
