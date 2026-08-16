@@ -6045,6 +6045,20 @@ function renderRankTable(rows, title){
   };
 }
 
+// A phone can "freeze"/suspend a backgrounded PWA instead of fully closing
+// it, and resuming it later (tapping the home-screen icon again) restores
+// that exact frozen state via the browser's back-forward cache rather than
+// truly reloading — which is fine most of the time, but any network
+// request that was still in flight the moment it got frozen can come back
+// in a state nothing here ever handles, leaving the page stuck showing
+// nothing (only fixed, until now, by force-closing and relaunching, which
+// throws the frozen state away and starts genuinely fresh). Detecting that
+// exact restore (pageshow with persisted:true) and forcing a real reload
+// reproduces what force-closing does, automatically — the person never
+// needs to do it by hand.
+window.addEventListener('pageshow', (e)=>{
+  if(e.persisted) location.reload();
+});
 boot();
 if('serviceWorker' in navigator){ window.addEventListener('load', ()=>navigator.serviceWorker.register('sw.js').catch(()=>{})); }
 </script>
