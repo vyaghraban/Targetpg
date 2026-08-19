@@ -16,7 +16,7 @@
 // installability) and otherwise stay out of the way.
 // =====================================================================
 
-const CACHE_NAME = 'qbank-shell-v3';
+const CACHE_NAME = 'qbank-shell-v4';
 const CACHE_FILES = [
   './manifest.json',
   './favicon-32.png',

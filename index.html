@@ -19,8 +19,34 @@
 <meta name="msapplication-TileColor" content="#0B1220">
 <meta name="msapplication-TileImage" content="icon-144.png">
 <meta name="msapplication-config" content="none">
+<!-- Preconnect to every third-party origin the page needs early — each one
+     is a separate DNS lookup + TLS handshake, and on a phone's FIRST-ever
+     visit (nothing cached yet: fresh install, cold DNS, no reusable
+     connections) those add up to real, visible seconds — exactly the
+     "works fine once I reopen it, but hangs the very first time" pattern,
+     since the second open reuses what the OS already resolved/connected.
+     Doing all these handshakes in parallel as soon as the browser starts
+     parsing <head>, instead of only starting them when each resource is
+     actually requested further down, is the concrete fix for that. -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link rel="preconnect" href="https://cdnjs.cloudflare.com">
+<link rel="preconnect" href="https://ewchwphfzdsbmbchensk.supabase.co">
+<!-- Google Fonts stylesheet loaded non-render-blocking: preload it (just a
+     fetch, doesn't block parsing), then flip its rel to "stylesheet" once
+     it actually arrives. The plain `<link rel="stylesheet">` this replaces
+     was one more thing the browser had to fully fetch before it could even
+     start painting the page — on a cold connection that round trip alone
+     could be a big chunk of the "just shows the icon" wait. Text still
+     renders immediately in a fallback font and swaps once this lands
+     (font-display=swap in the URL), so nothing is invisible in the
+     meantime — this only removes it from the render-blocking path. The
+     <noscript> tag is the fallback for the vanishingly rare case JS is
+     off, so fonts still load the normal blocking way instead of never
+     loading at all. -->
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" onload="this.onload=null;this.rel='stylesheet'">
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap"></noscript>
 <!-- These are heavy libraries only needed for later user actions (screenshot
      export, stats charts, PDF/ZIP export) — never at initial page load. Left
      as plain blocking script tags (no defer/async), the browser has to fully
@@ -333,6 +359,8 @@ th{color:var(--text-dim);font-weight:600;font-size:12px;text-transform:uppercase
 .imgzoom-hint{position:absolute;bottom:calc(18px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);color:rgba(255,255,255,.75);font-size:12.5px;font-family:var(--body);white-space:nowrap;pointer-events:none;}
 .filepick{border:1px dashed var(--border);border-radius:10px;padding:14px;margin-top:6px;transition:border-color .18s;}
 .filepick:hover{border-color:var(--amber);}
+.field-error{border-color:var(--red) !important;box-shadow:0 0 0 3px rgba(240,82,90,.18) !important;animation:fieldShake .32s;}
+@keyframes fieldShake{0%,100%{transform:translateX(0);}20%{transform:translateX(-6px);}40%{transform:translateX(6px);}60%{transform:translateX(-4px);}80%{transform:translateX(4px);}}
 .themebtn{background:var(--surface-2);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:9px 12px;font-size:17px;min-height:auto;line-height:1;transition:transform .2s var(--ease), border-color .2s;}
 .themebtn:hover{transform:rotate(20deg);border-color:var(--amber);}
 /* ---- theme swatch picker (replaces the single cycling icon button) ---- */
@@ -782,6 +810,29 @@ function toast(msg){
   const t=document.createElement('div'); t.className='toast'; t.textContent=msg;
   document.body.appendChild(t); setTimeout(()=>t.remove(),2600);
 }
+// Checks a list of {el, label} required fields, highlights EVERY empty one
+// (red border + a quick shake, cleared the moment the person interacts with
+// that field) instead of stopping at the first one, and pops a single toast
+// naming the first missing field — so a person filling the signup form sees
+// every field that still needs attention in one pass, not one at a time
+// after repeated failed submits. Returns true if anything was empty (so the
+// caller knows to stop submitting).
+function flagEmptyFields(fields){
+  const empties = fields.filter(f => !f.el || !String(f.value ?? '').trim());
+  empties.forEach(f=>{
+    if(!f.el) return;
+    f.el.classList.remove('field-error'); void f.el.offsetWidth; f.el.classList.add('field-error');
+    const clear = ()=>{ f.el.classList.remove('field-error'); f.el.removeEventListener('input', clear); f.el.removeEventListener('change', clear); f.el.removeEventListener('click', clear); };
+    f.el.addEventListener('input', clear);
+    f.el.addEventListener('change', clear);
+    f.el.addEventListener('click', clear); // covers file pickers and the security-question sheet trigger, which don't fire 'input'
+  });
+  if(empties.length){
+    toast(empties.length===1 ? `Please fill: ${empties[0].label}` : `Please fill: ${empties[0].label} + ${empties.length-1} more field${empties.length>2?'s':''}`);
+    empties[0].el?.scrollIntoView({ behavior:'smooth', block:'center' });
+  }
+  return empties.length > 0;
+}
 function getDeviceId(){
   let id = localStorage.getItem('qb_device_id');
   if(!id){ id = 'dev_'+Math.random().toString(36).slice(2)+Date.now().toString(36); localStorage.setItem('qb_device_id', id); }
@@ -1087,12 +1138,39 @@ function handleAuthRedirect(){
     history.replaceState(null, '', location.pathname + (qs?('?'+qs):''));
   }
 }
+// Generic timeout guard — same reasoning as the getSession() race above.
+// Used to stop any single stalled first-load network call from hanging
+// the whole boot sequence; falls back to a safe default instead.
+function withTimeout(promise, ms, fallbackValue){
+  return Promise.race([
+    promise,
+    new Promise(res => setTimeout(()=> res(fallbackValue), ms))
+  ]).catch(()=> fallbackValue);
+}
 async function boot(){
   S.deviceId = getDeviceId();
   handleAuthRedirect();
-  const { data:{ session } } = await sb.auth.getSession();
+  // getSession() is usually instant (reads the saved session from local
+  // storage), but if the token needs a background refresh it does hit the
+  // network — and on a phone's very first cold connection (fresh install,
+  // no cached DNS/TLS), a slow or stalled request here had nothing to time
+  // it out, so the app could sit on the splash screen indefinitely. Racing
+  // it against a timeout means a bad first attempt falls through to the
+  // login screen (which the person can actually act on — retry, or just
+  // log in again) instead of hanging forever with no way out except force-
+  // closing and reopening, which is exactly the symptom this fixes.
+  let session = null;
+  try{
+    const result = await Promise.race([
+      sb.auth.getSession(),
+      new Promise((_, reject)=> setTimeout(()=> reject(new Error('timeout')), 10000))
+    ]);
+    session = result?.data?.session ?? null;
+  }catch(e){
+    console.error('[boot] getSession timed out or failed — continuing to the login screen', e);
+  }
   S.session = session;
-  await Promise.all([ session ? loadProfile() : Promise.resolve(), loadAnnouncement() ]);
+  await Promise.all([ session ? withTimeout(loadProfile(), 12000, null) : Promise.resolve(), withTimeout(loadAnnouncement(), 8000, null) ]);
   const shortcut = new URLSearchParams(location.search).get('shortcut');
   if(shortcut && S.profile && S.profile.role!=='admin'){ S.utab = shortcut; }
   render();
@@ -1663,28 +1741,44 @@ function renderAuth(){
   if(document.getElementById('forgotLink')) document.getElementById('forgotLink').onclick = ()=>{ S.authMode='reset'; renderAuth(); };
   document.getElementById('authGo').onclick = async ()=>{
     S.authNotice = null;
-    const email=document.getElementById('email').value.trim();
-    const password=document.getElementById('pass').value;
+    const emailEl = document.getElementById('email');
+    const passEl = document.getElementById('pass');
+    const email=emailEl.value.trim();
+    const password=passEl.value;
     const errEl=document.getElementById('authErr'); errEl.textContent='';
-    if(!email||!password){ errEl.textContent='Enter email and password.'; return; }
+    if(flagEmptyFields([{el:emailEl, label:'Email', value:email}, {el:passEl, label:'Password', value:password}])) return;
     const btn = document.getElementById('authGo');
     if(S.authMode==='signup'){
-      const name = document.getElementById('suName').value.trim();
-      const age = document.getElementById('suAge').value;
-      const batch = document.getElementById('suBatch').value.trim();
-      const college = document.getElementById('suCollege').value.trim();
-      const avatarFile = document.getElementById('suAvatar').files[0];
-      const idFile = document.getElementById('suCollegeId').files[0];
-      const secQuestion = (S.suSecCustom ? (document.getElementById('suSecQCustom')?.value||'').trim() : (S.suSecQ||'').trim());
-      const secAnswer = document.getElementById('suSecA').value.trim();
-      if(!name){ errEl.textContent='Enter your name.'; return; }
-      if(!age){ errEl.textContent='Enter your age.'; return; }
-      if(!batch){ errEl.textContent='Enter your batch.'; return; }
-      if(!college){ errEl.textContent='Enter your college.'; return; }
-      if(!avatarFile){ errEl.textContent='Upload a profile picture.'; return; }
-      if(!idFile){ errEl.textContent='Upload your college ID.'; return; }
-      if(!secQuestion){ errEl.textContent='Pick or write a security question.'; return; }
-      if(!secAnswer){ errEl.textContent='Enter an answer to your security question.'; return; }
+      const nameEl = document.getElementById('suName');
+      const ageEl = document.getElementById('suAge');
+      const batchEl = document.getElementById('suBatch');
+      const collegeEl = document.getElementById('suCollege');
+      const avatarInput = document.getElementById('suAvatar');
+      const idInput = document.getElementById('suCollegeId');
+      const secQCustomEl = document.getElementById('suSecQCustom');
+      const secAEl = document.getElementById('suSecA');
+      const name = nameEl.value.trim();
+      const age = ageEl.value;
+      const batch = batchEl.value.trim();
+      const college = collegeEl.value.trim();
+      const avatarFile = avatarInput.files[0];
+      const idFile = idInput.files[0];
+      const secQuestion = (S.suSecCustom ? (secQCustomEl?.value||'').trim() : (S.suSecQ||'').trim());
+      const secAnswer = secAEl.value.trim();
+      // Highlights EVERY empty required field at once (red border + shake)
+      // and toasts which one to fill first, instead of the old one-at-a-
+      // time "Enter your name." text that only ever pointed out a single
+      // missing field per submit attempt.
+      if(flagEmptyFields([
+        { el:nameEl, label:'Full name', value:name },
+        { el:ageEl, label:'Age', value:age },
+        { el:batchEl, label:'Batch', value:batch },
+        { el:collegeEl, label:'College', value:college },
+        { el:avatarInput.closest('.filepick'), label:'Profile picture', value:avatarFile?'x':'' },
+        { el:idInput.closest('.filepick'), label:'College ID', value:idFile?'x':'' },
+        { el:secQCustomEl || document.getElementById('suSecQTrigger'), label:'Security question', value:secQuestion },
+        { el:secAEl, label:'Security answer', value:secAnswer },
+      ])) return;
       btn.disabled = true; btn.textContent = 'Creating account…';
       // emailRedirectTo is set explicitly (rather than relying only on the
       // dashboard's "Site URL") so the confirmation link always lands back
@@ -1694,10 +1788,26 @@ function renderAuth(){
       // URLs allow-list there, or Supabase will refuse the redirect and
       // show its own blank/error page instead of ever reaching the app).
       const { error, data: suData } = await sb.auth.signUp({ email, password, options: { emailRedirectTo: window.location.origin + window.location.pathname } });
-      if(error){ errEl.textContent=error.message; btn.disabled=false; btn.textContent='Create account'; return; }
+      if(error){ errEl.textContent=authErrorMessage(error); btn.disabled=false; btn.textContent='Create account'; return; }
+      // signUp() only returns a live session if the Supabase project has
+      // "Confirm email" turned OFF. If it's ON, the account is created but
+      // stays unconfirmed until the user clicks the emailed link — and
+      // Supabase deliberately makes signInWithPassword() fail with the same
+      // generic "Invalid login credentials" message for an unconfirmed
+      // account as for a wrong password (anti-enumeration behaviour), so
+      // immediately trying to sign in here would show every brand-new user
+      // a scary, wrong-looking "invalid credentials" error right after they
+      // just successfully created the account. So: only auto-sign-in when
+      // signUp() already handed back a session; otherwise stop here and
+      // tell them to confirm their email first.
+      if(!suData?.session){
+        toast('Account created! Check your email (and spam folder) for a confirmation link, then log in.');
+        S.authMode = 'login';
+        btn.disabled = false; btn.textContent = 'Create account';
+        renderAuth();
+        return;
+      }
       toast('Account created. Signing you in…');
-      const { error: siErr } = await sb.auth.signInWithPassword({ email, password });
-      if(siErr){ errEl.textContent=siErr.message; btn.disabled=false; btn.textContent='Create account'; return; }
       const { data:{ session } } = await sb.auth.getSession();
       S.session=session; await loadProfile();
       // Profile row now exists (loadProfile creates it) — fill in what the
@@ -1728,10 +1838,29 @@ function renderAuth(){
     }
     btn.disabled = true;
     const { error } = await sb.auth.signInWithPassword({ email, password });
-    if(error){ errEl.textContent=error.message; btn.disabled=false; return; }
+    if(error){ errEl.textContent=authErrorMessage(error); btn.disabled=false; return; }
     const { data:{ session } } = await sb.auth.getSession();
     S.session=session; await loadProfile(); render();
   };
+}
+// Supabase returns the exact same generic "Invalid login credentials"
+// message whether the password was wrong OR the account's email was never
+// confirmed (this is intentional on Supabase's side, so a login attempt
+// can't be used to probe which accounts exist). Since this app has its own
+// admin-approval flow (profiles.status), most deployments turn OFF
+// "Confirm email" in the Supabase dashboard — but if it's ever left on and
+// an email fails to deliver, a user is left completely stuck with no way to
+// tell why. This just makes that dead end explain itself instead of
+// looking like a plain wrong-password error.
+function authErrorMessage(error){
+  const msg = error?.message || 'Something went wrong. Please try again.';
+  if(/invalid login credentials/i.test(msg)){
+    return 'Invalid email or password. If you just signed up, make sure you clicked the confirmation link in your email (check spam) before logging in.';
+  }
+  if(/email not confirmed/i.test(msg)){
+    return 'Please confirm your email first — check your inbox (and spam folder) for the confirmation link.';
+  }
+  return msg;
 }
 
 // ================= USER SIDE =================
@@ -5951,6 +6080,20 @@ function renderRankTable(rows, title){
   };
 }
 
+// A phone can "freeze"/suspend a backgrounded PWA instead of fully closing
+// it, and resuming it later (tapping the home-screen icon again) restores
+// that exact frozen state via the browser's back-forward cache rather than
+// truly reloading — which is fine most of the time, but any network
+// request that was still in flight the moment it got frozen can come back
+// in a state nothing here ever handles, leaving the page stuck showing
+// nothing (only fixed, until now, by force-closing and relaunching, which
+// throws the frozen state away and starts genuinely fresh). Detecting that
+// exact restore (pageshow with persisted:true) and forcing a real reload
+// reproduces what force-closing does, automatically — the person never
+// needs to do it by hand.
+window.addEventListener('pageshow', (e)=>{
+  if(e.persisted) location.reload();
+});
 boot();
 if('serviceWorker' in navigator){ window.addEventListener('load', ()=>navigator.serviceWorker.register('sw.js').catch(()=>{})); }
 </script>
