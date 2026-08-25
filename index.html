@@ -1208,15 +1208,15 @@ async function loadProfile(){
   }
   S.profile = data;
   if(S.profile && S.profile.role!=='admin'){
-    // Subscription expired since last login: flip them to revoked and kick
-    // them out straight to the login screen instead of letting them sit on
-    // a "locked" screen while still technically signed in.
+    // Subscription expired since last login: flip status to 'revoked' in the
+    // DB, but keep the user signed IN — renderUser() already shows a locked
+    // "Subscription inactive" banner plus a working Subscription tab, so
+    // they can pay and renew right there. Forcing a full sign-out here used
+    // to strand them on the login screen with no way to buy a plan.
     const expired = (S.profile.status==='active' || S.profile.status==='verified') && S.profile.subscription_expiry && new Date(S.profile.subscription_expiry) <= new Date();
     if(expired){
       await sb.from('profiles').update({status:'revoked'}).eq('id', S.profile.id);
-      S.authNotice = 'expired';
-      await signOut();
-      return;
+      S.profile.status = 'revoked';
     }
     await registerDevice();
     startExpiryWatcher();
@@ -1331,11 +1331,24 @@ function startExpiryWatcher(){
       return;
     }
     const expired = (data.status==='active' || data.status==='verified') && data.subscription_expiry && new Date(data.subscription_expiry) <= new Date();
+    if(expired){
+      // Subscription ran out while the app was open — flip status in the DB
+      // and just re-render in place (locked banner + Subscription tab) so
+      // they can renew immediately instead of getting force-logged-out.
+      if(S.profile.status!=='revoked'){
+        await sb.from('profiles').update({status:'revoked'}).eq('id', S.profile.id);
+        S.profile.status = 'revoked';
+        render();
+      }
+      return;
+    }
+    // Only an explicit admin revoke (not one we just caused via expiry
+    // above) should still force a sign-out — that's the admin intentionally
+    // pulling access, not a renewable subscription lapse.
     const revokedElsewhere = data.status==='revoked' && S.profile.status!=='revoked';
-    if(expired || revokedElsewhere){
-      if(expired) await sb.from('profiles').update({status:'revoked'}).eq('id', S.profile.id);
+    if(revokedElsewhere){
       clearInterval(expiryWatcherHandle); expiryWatcherHandle=null;
-      S.authNotice = expired ? 'expired' : 'revoked';
+      S.authNotice = 'revoked';
       await signOut();
     }
   }, 120000);
