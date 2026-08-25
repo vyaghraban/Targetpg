@@ -1354,6 +1354,26 @@ async function registerDevice(){
   }
   await sb.from('devices').insert({user_id:S.profile.id, device_id:S.deviceId});
 }
+// Called from the "Device limit reached" screen. Logs the account out of
+// every OTHER device (deletes their rows from `devices`) and registers
+// this device instead, so only one device stays signed in at a time —
+// same one-active-device model as before, just with an explicit switch
+// instead of a hard block.
+async function switchToThisDevice(){
+  const btn = document.getElementById('switchDev');
+  if(btn){ btn.disabled = true; btn.textContent = 'Switching…'; }
+  try{
+    await sb.from('devices').delete().eq('user_id', S.profile.id).neq('device_id', S.deviceId);
+    await sb.from('devices').insert({user_id:S.profile.id, device_id:S.deviceId});
+    S.deviceBlocked = false;
+    startExpiryWatcher();
+    render();
+  }catch(e){
+    console.error('[switchToThisDevice] failed', e);
+    if(btn){ btn.disabled = false; btn.textContent = 'Log out other device & continue here'; }
+    alert('Could not switch devices — check your connection and try again.');
+  }
+}
 
 // ---------- render dispatcher ----------
 function render(){
@@ -1362,9 +1382,11 @@ function render(){
   if(!S.session){ return renderAuth(); }
   if(S.deviceBlocked){
     app.innerHTML = `<div class="container"><div class="card"><h2>Device limit reached</h2>
-      <p class="muted">This account is already signed in on the maximum number of allowed devices. Ask your admin to increase your device limit, or sign out of another device.</p>
-      <button class="ghost" id="so">Sign out</button></div></div>`;
+      <p class="muted">This account is already signed in on the maximum number of allowed devices. You can log out of the other device and continue here, or sign out of this device instead.</p>
+      <button id="switchDev" style="margin-bottom:8px;width:100%;">Log out other device & continue here</button>
+      <button class="ghost" id="so" style="width:100%;">Sign out of this device</button></div></div>`;
     document.getElementById('so').onclick = signOut;
+    document.getElementById('switchDev').onclick = switchToThisDevice;
     return;
   }
   // Respect S.view here: an admin who has switched into "Practice (user
@@ -1428,7 +1450,21 @@ function bindTopbar(){
   const eb=document.getElementById('editProfileBtn'); if(eb) eb.onclick=()=>{ closeDrawer(); openEditProfileModal(); };
   wireThemeSwatches();
 }
-async function signOut(){ if(expiryWatcherHandle){ clearInterval(expiryWatcherHandle); expiryWatcherHandle=null; } await sb.auth.signOut(); S.profile=null; S.deviceBlocked=false; render(); }
+async function signOut(){
+  if(expiryWatcherHandle){ clearInterval(expiryWatcherHandle); expiryWatcherHandle=null; }
+  // Release this device's slot in the `devices` table BEFORE clearing
+  // S.profile — otherwise the row lingers forever and this device keeps
+  // counting against the device_limit even though the session is gone.
+  // This is what let a user hit "device limit reached" on a second device
+  // right after logging out of the first one: the old row was never removed.
+  try{
+    if(S.profile?.id && S.deviceId){
+      await sb.from('devices').delete().eq('user_id', S.profile.id).eq('device_id', S.deviceId);
+    }
+  }catch(e){ console.error('[signOut] failed to release device slot', e); }
+  await sb.auth.signOut();
+  S.profile=null; S.deviceBlocked=false; render();
+}
 
 // Resizes + re-encodes an image client-side before it ever reaches
 // Storage. Phone-camera photos (3-8MB) routinely shrink to a few hundred
