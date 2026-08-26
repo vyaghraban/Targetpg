@@ -1,26 +1,11 @@
-# Cloudflare Pages _headers file
-# ================================================================
-# Put this file at the ROOT of the repo, right alongside index.html
-# (same folder, NOT inside a subfolder). Cloudflare Pages picks it up
-# automatically on the next deploy — no dashboard setting needed.
-#
-# What this fixes: without this, a phone that already has the app added
-# to its home screen can keep showing an OLD cached copy of index.html /
-# supabase-client.js indefinitely, even after a new version is deployed —
-# which is exactly the "won't open from the home screen icon, but opens
-# fine from a fresh link" symptom. These two files are small and change
-# often, so they should never be cached — the browser should always ask
-# Cloudflare "is there a newer version?" before using what it has.
-#
-# (Everything else — fonts, external CDN libraries — is unaffected and
-# keeps its normal caching, only these two files are forced to
-# always-revalidate.)
-
 /index.html
   Cache-Control: no-cache, no-store, must-revalidate
 
 /
   Cache-Control: no-cache, no-store, must-revalidate
 
-/supabase-client.js
+/sw.js
   Cache-Control: no-cache, no-store, must-revalidate
+
+/manifest.json
+  Cache-Control: public, max-age=3600
